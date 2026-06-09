@@ -12,7 +12,7 @@ import {
 	updateHighlighterMenu,
 	updateHighlightColor,
 } from './highlighter';
-import { clearCommentBoxes, startAddingComment } from './comment-overlays';
+import { clearCommentBoxes, startAddingComment, emphasizeCommentBox } from './comment-overlays';
 import { throttle } from './throttle';
 import { getElementByXPath, isDarkColor, setElementHTML } from './dom-utils';
 import { getMessage } from './i18n';
@@ -389,6 +389,15 @@ export function handleMouseUp(event: MouseEvent | TouchEvent) {
 		target = document.elementFromPoint(touch.clientX, touch.clientY) as Element;
 	}
 
+	// Mouseups inside our own UI (comment box, action menu, selection action)
+	// must never create a highlight. In particular, double-clicking a comment
+	// to edit it selects a word — without this guard that selection gets
+	// hijacked into a new highlight and the selection is cleared, breaking the
+	// comment's dblclick-to-edit.
+	if (target?.closest('.obsidian-comment-box, .obsidian-highlight-action-menu, .obsidian-selection-action')) {
+		return;
+	}
+
 	const selection = window.getSelection();
 	if (selection && !selection.isCollapsed) {
 		// When the user drags past the left/right edge of the content area,
@@ -457,6 +466,12 @@ export function planHighlightOverlayRects(target: Element, highlight: AnyHighlig
 	const rect = target.getBoundingClientRect();
 	const overlay = document.createElement('div');
 	overlay.className = `obsidian-highlight-overlay color-${highlight.color || 'yellow'}`;
+	// Images shouldn't be tinted — a color wash ruins the picture. Mark image
+	// overlays so the CSS shows only a colored border around them instead.
+	const tag = target.tagName.toUpperCase();
+	const isImage = tag === 'IMG' || tag === 'PICTURE'
+		|| (tag === 'FIGURE' && !!target.querySelector('img, picture'));
+	if (isImage) overlay.classList.add('obsidian-highlight-overlay-image');
 	overlay.dataset.highlightId = highlight.id;
 	overlay.style.position = 'absolute';
 	overlay.style.left = `${rect.left + window.scrollX - 2}px`;
@@ -543,6 +558,15 @@ function handleHighlightHover(event: MouseEvent) {
 		} else {
 			document.body.classList.remove('obsidian-highlighter-hover-suppress');
 		}
+
+		// Emphasize the comment box tied to whatever highlight the cursor is on
+		// (or the box itself), so it's easy to see which note goes with which
+		// highlight. Cleared when the cursor is over neither.
+		let emphasizeId = textId || overlay?.dataset.highlightId || null;
+		if (!emphasizeId && onCommentBox) {
+			emphasizeId = target?.closest('.obsidian-comment-box')?.getAttribute('data-highlight-id') || null;
+		}
+		emphasizeCommentBox(emphasizeId);
 
 		const cursor = onHighlight ? 'pointer' : '';
 		if (cursor !== lastCursor) { document.body.style.cursor = cursor; lastCursor = cursor; }
