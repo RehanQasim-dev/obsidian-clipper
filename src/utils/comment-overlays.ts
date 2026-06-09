@@ -1,6 +1,6 @@
 import { AnyHighlightData, highlights, saveHighlights, updateHighlights } from './highlighter';
 import { getElementByXPath } from './dom-utils';
-import { textHighlightRanges } from './highlighter-overlays';
+import { textHighlightRanges, setActiveHighlight } from './highlighter-overlays';
 
 const COMMENT_BOX_WIDTH = 320;
 const COMMENT_BOX_MARGIN = 20;
@@ -335,8 +335,8 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		}
 	});
 
-	box.addEventListener('mouseenter', () => showActiveRing(highlight.id));
-	box.addEventListener('mouseleave', () => hideActiveRing());
+	box.addEventListener('mouseenter', () => setActiveHighlight(highlight.id));
+	box.addEventListener('mouseleave', () => setActiveHighlight(null));
 
 	box.addEventListener('dblclick', (e) => {
 		const target = e.target as HTMLElement;
@@ -537,7 +537,7 @@ function deleteComment(highlightId: string, index: number) {
 		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
-		hideActiveRing(); // Hide the ring in case the comment box is completely removed
+		setActiveHighlight(null); // clear emphasis in case the box is removed
 		renderCommentBoxes();
 	}
 }
@@ -547,7 +547,7 @@ export function clearCommentBoxes() {
 	activeCommentBoxes.clear();
 	document.body.style.paddingRight = '';
 	document.body.style.paddingLeft = '';
-	hideActiveRing();
+	setActiveHighlight(null);
 }
 
 // Emphasize the comment box tied to a highlight (e.g. while hovering that
@@ -563,48 +563,6 @@ export function emphasizeCommentBox(highlightId: string | null) {
 	if (highlightId) {
 		activeCommentBoxes.get(highlightId)?.classList.add('is-active');
 	}
-}
-
-let activeRings: HTMLDivElement[] = [];
-
-function showActiveRing(highlightId: string) {
-	hideActiveRing();
-	const highlight = highlights.find(h => h.id === highlightId);
-	if (!highlight) return;
-
-	let rects: DOMRect[] = [];
-	if (highlight.type === 'text') {
-		const ranges = textHighlightRanges.get(highlightId);
-		if (ranges && ranges.length > 0) {
-			rects = Array.from(ranges[0].getClientRects());
-		}
-	} else {
-		const target = getElementByXPath(highlight.xpath);
-		if (target) {
-			rects = [target.getBoundingClientRect()];
-		}
-	}
-
-	const PAD = 2;
-	for (let i = 0; i < rects.length; i++) {
-		const rect = rects[i];
-		let ring = activeRings[i];
-		if (!ring) {
-			ring = document.createElement('div');
-			ring.className = 'obsidian-highlight-active-ring';
-			document.body.appendChild(ring);
-			activeRings.push(ring);
-		}
-		ring.style.display = 'block';
-		ring.style.left = `${rect.left + window.scrollX - PAD}px`;
-		ring.style.top = `${rect.top + window.scrollY - PAD}px`;
-		ring.style.width = `${rect.width + PAD * 2}px`;
-		ring.style.height = `${rect.height + PAD * 2}px`;
-	}
-}
-
-function hideActiveRing() {
-	activeRings.forEach(ring => ring.style.display = 'none');
 }
 
 function escapeHtml(unsafe: string) {

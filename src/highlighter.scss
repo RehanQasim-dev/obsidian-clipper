@@ -177,6 +177,15 @@ body.obsidian-highlighter-active {
 	background-color: rgba(75, 192, 120, 0.35);
 }
 
+// Active emphasis (shown while hovering the associated comment box). Purple to
+// match the comment box's hover ring, with an underline so it reads as
+// "this one" even where the tint is subtle.
+::highlight(obsidian-highlight-active) {
+	background-color: rgba(137, 93, 244, 0.35);
+	text-decoration: underline;
+	text-decoration-color: #895DF4;
+}
+
 .obsidian-highlight-color-btn {
 	width: 14px !important;
 	height: 14px !important;
@@ -333,6 +342,15 @@ body.obsidian-highlighter-active {
 		border: 2px solid rgb(255, 235, 0); // default yellow
 		&.color-red { border-color: rgb(255, 99, 132); }
 		&.color-green { border-color: rgb(75, 192, 120); }
+	}
+
+	// Active emphasis for image/element highlights (hovering the comment box):
+	// a purple glow matching the text emphasis and the comment box ring.
+	&.is-active {
+		mix-blend-mode: normal;
+		border: 2px solid #895DF4 !important;
+		box-shadow: 0 0 0 6px rgba(137, 93, 244, 0.45), 0 0 16px 4px rgba(137, 93, 244, 0.35);
+		border-radius: 6px;
 	}
 }
 
@@ -693,13 +711,3 @@ body {
 	}
 }
 
-.obsidian-highlight-active-ring {
-	position: absolute;
-	border: 2px solid #895DF4;
-	border-radius: 4px;
-	pointer-events: none;
-	z-index: 999999997;
-	box-sizing: border-box;
-	box-shadow: 0 0 0 4px rgba(137, 93, 244, 0.2);
-	display: none;
-}

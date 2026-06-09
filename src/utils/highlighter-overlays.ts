@@ -136,6 +136,57 @@ export function renderTextHighlight(highlight: { id: string; xpath: string; star
 export function clearTextHighlights(): void {
 	HIGHLIGHT_INSTANCES.forEach(hl => hl.clear());
 	textHighlightRanges.clear();
+	setActiveHighlight(null);
+}
+
+// --- Active-highlight emphasis ---
+//
+// When the cursor is on a comment box, emphasize the highlight that note
+// belongs to so the user can see the association. Unified for both types:
+//   - text  → painted into a dedicated, higher-priority CSS highlight layer
+//             (`obsidian-highlight-active`) so it repaints natively on scroll,
+//             with no stray per-line boxes.
+//   - image / element → a purple glow on the overlay div.
+// The purple accent matches the comment box's hover ring, tying the two ends
+// of the association together visually.
+const ACTIVE_HIGHLIGHT_NAME = 'obsidian-highlight-active';
+let activeHighlightInstance: HighlightInstance | null = null;
+let activeOverlayId: string | null = null;
+
+function ensureActiveHighlight(): HighlightInstance | null {
+	const registry = getHighlightRegistry();
+	const HighlightCtor = (window as unknown as { Highlight?: new () => HighlightInstance }).Highlight;
+	if (!registry || !HighlightCtor) return null;
+	if (activeHighlightInstance) return activeHighlightInstance;
+	const inst = new HighlightCtor();
+	inst.priority = 10; // above the color highlights so the emphasis wins
+	registry.set(ACTIVE_HIGHLIGHT_NAME, inst);
+	activeHighlightInstance = inst;
+	return inst;
+}
+
+export function setActiveHighlight(id: string | null): void {
+	// Clear any previous emphasis (both kinds — we don't track which it was).
+	activeHighlightInstance?.clear();
+	if (activeOverlayId) {
+		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${activeOverlayId}"]`)
+			.forEach(el => el.classList.remove('is-active'));
+		activeOverlayId = null;
+	}
+	if (!id) return;
+
+	const highlight = highlights.find((h: AnyHighlightData) => h.id === id);
+	if (!highlight) return;
+
+	if (highlight.type === 'text') {
+		const inst = ensureActiveHighlight();
+		const ranges = textHighlightRanges.get(id);
+		if (inst && ranges) ranges.forEach(r => inst.add(r));
+	} else {
+		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${id}"]`)
+			.forEach(el => el.classList.add('is-active'));
+		activeOverlayId = id;
+	}
 }
 
 function findOverlayAtPoint(x: number, y: number): HTMLElement | null {
@@ -472,6 +523,8 @@ export function planHighlightOverlayRects(target: Element, highlight: AnyHighlig
 	const isImage = tag === 'IMG' || tag === 'PICTURE'
 		|| (tag === 'FIGURE' && !!target.querySelector('img, picture'));
 	if (isImage) overlay.classList.add('obsidian-highlight-overlay-image');
+	// Preserve the hover emphasis if this overlay is being rebuilt while active.
+	if (activeOverlayId === highlight.id) overlay.classList.add('is-active');
 	overlay.dataset.highlightId = highlight.id;
 	overlay.style.position = 'absolute';
 	overlay.style.left = `${rect.left + window.scrollX - 2}px`;
@@ -518,6 +571,20 @@ const throttledUpdateHighlights = throttle(() => {
 window.addEventListener('resize', () => { throttledUpdateHighlights(); hideHighlightActionMenu(); });
 window.addEventListener('scroll', throttledUpdateHighlights);
 
+// Our own injected UI (overlays, comment boxes, menus). Mutations to these are
+// self-inflicted (e.g. toggling the `is-active` glow on an overlay) and must
+// not trigger a reposition — rebuilding the overlay would instantly drop the
+// class we just added, making the emphasis flash for a single frame.
+function isOwnHighlighterUi(el: Element): boolean {
+	if (el.id.startsWith('obsidian-highlight')) return true;
+	const c = el.classList;
+	return c.contains('obsidian-highlight-overlay')
+		|| c.contains('obsidian-comment-box')
+		|| c.contains('obsidian-highlight-action-menu')
+		|| c.contains('obsidian-selection-action')
+		|| c.contains('obsidian-highlighter-menu');
+}
+
 // Mutation observer re-positions element overlays when the page reflows.
 // Lazily connected — observing document.body on every page the extension
 // runs on (before any highlights exist) is wasted work, especially on busy
@@ -525,7 +592,7 @@ window.addEventListener('scroll', throttledUpdateHighlights);
 const observer = new MutationObserver((mutations) => {
 	if (isApplyingHighlights) return;
 	const shouldUpdate = mutations.some(m => {
-		if (!(m.target instanceof Element) || m.target.id.startsWith('obsidian-highlight')) return false;
+		if (!(m.target instanceof Element) || isOwnHighlighterUi(m.target)) return false;
 		return m.type === 'childList'
 			|| (m.type === 'attributes' && (m.attributeName === 'style' || m.attributeName === 'class'));
 	});
@@ -559,14 +626,11 @@ function handleHighlightHover(event: MouseEvent) {
 			document.body.classList.remove('obsidian-highlighter-hover-suppress');
 		}
 
-		// Emphasize the comment box tied to whatever highlight the cursor is on
-		// (or the box itself), so it's easy to see which note goes with which
-		// highlight. Cleared when the cursor is over neither.
-		let emphasizeId = textId || overlay?.dataset.highlightId || null;
-		if (!emphasizeId && onCommentBox) {
-			emphasizeId = target?.closest('.obsidian-comment-box')?.getAttribute('data-highlight-id') || null;
-		}
-		emphasizeCommentBox(emphasizeId);
+		// Emphasize the comment box tied to whatever highlight the cursor is on,
+		// so it's easy to see which note goes with which highlight. Only the
+		// highlighted text triggers this — hovering or typing in the box itself
+		// should not show the outer ring.
+		emphasizeCommentBox(textId || overlay?.dataset.highlightId || null);
 
 		const cursor = onHighlight ? 'pointer' : '';
 		if (cursor !== lastCursor) { document.body.style.cursor = cursor; lastCursor = cursor; }
