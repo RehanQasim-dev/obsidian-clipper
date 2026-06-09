@@ -485,6 +485,37 @@ window.addEventListener('obsidian-add-comment', ((e: CustomEvent) => {
 	startAddingComment(e.detail);
 }) as EventListener);
 
+// Commit every open editor — used when the user interacts outside the comment
+// boxes. Reads each editor's current text and saves it (empty text just closes
+// the editor, same as Cancel).
+function commitOpenEditors() {
+	// Snapshot ids first: saveComment() mutates editingHighlightIds mid-loop.
+	for (const id of Array.from(editingHighlightIds)) {
+		const ta = activeCommentBoxes.get(id)?.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement | null;
+		saveComment(id, ta ? ta.value.trim() : '');
+	}
+	if (editingNoteKey) {
+		const { highlightId, index } = parseNoteKey(editingNoteKey);
+		const ta = activeCommentBoxes.get(highlightId)?.querySelector('textarea.edit-comment-textarea') as HTMLTextAreaElement | null;
+		if (ta) {
+			saveEditedComment(highlightId, index, ta.value.trim());
+		} else {
+			editingNoteKey = null;
+			renderCommentBoxes();
+		}
+	}
+}
+
+// Pressing anywhere outside the comment boxes auto-saves any open comment.
+// mousedown (not click) so it fires before a Ctrl+click's later `click` opens
+// a new editor — otherwise we'd immediately close the editor just opened.
+document.addEventListener('mousedown', (e) => {
+	const target = e.target as HTMLElement | null;
+	if (target?.closest('.obsidian-comment-box')) return;
+	if (editingHighlightIds.size === 0 && !editingNoteKey) return;
+	commitOpenEditors();
+}, true);
+
 function saveComment(highlightId: string, text: string) {
 	// Guard against double-fire: the editor only exists while the id is in the
 	// editing set. Once we've saved (which clears it), a stray repeat click
