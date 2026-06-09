@@ -128,17 +128,30 @@ body.obsidian-highlighter-active {
 	// Disable pinch zoom on mobile
 	touch-action: pan-x pan-y;
 
-	&:not(.obsidian-highlighter-hover-suppress) {
-		&, * {
-			cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23895DF4'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, text !important;
-		}
-		
-		figure, picture, img, a, table, pre {
-			cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23895DF4'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, crosshair !important;
-		}
+	&[data-obsidian-color="yellow"]:not(.obsidian-highlighter-hover-suppress),
+	&:not([data-obsidian-color]):not(.obsidian-highlighter-hover-suppress) {
+		&, * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23ffeb00'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, text !important; }
+		figure, picture, img, a, table, pre { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23ffeb00'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, crosshair !important; }
 	}
-	*::selection {
+
+	&[data-obsidian-color="red"]:not(.obsidian-highlighter-hover-suppress) {
+		&, * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23ff6384'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, text !important; }
+		figure, picture, img, a, table, pre { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%23ff6384'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, crosshair !important; }
+	}
+
+	&[data-obsidian-color="green"]:not(.obsidian-highlighter-hover-suppress) {
+		&, * { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%234bc078'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, text !important; }
+		figure, picture, img, a, table, pre { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='32' height='32' viewBox='0 0 24 24'><g stroke='%23ffffff' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3' fill='%234bc078'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4' fill='%23000000'/></g></svg>") 0 32, crosshair !important; }
+	}
+	&[data-obsidian-color="yellow"] *::selection,
+	&:not([data-obsidian-color]) *::selection {
 		background-color: rgba(255, 235, 0, 0.35) !important;
+	}
+	&[data-obsidian-color="red"] *::selection {
+		background-color: rgba(255, 99, 132, 0.35) !important;
+	}
+	&[data-obsidian-color="green"] *::selection {
+		background-color: rgba(75, 192, 120, 0.35) !important;
 	}
 	
 	.obsidian-highlight-overlay {
@@ -429,10 +442,12 @@ body {
 
 .obsidian-comment-box {
 	position: absolute;
-	background: #ffffff;
+	background: rgba(255, 255, 255, 0.92);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
 	border: 1px solid rgba(0, 0, 0, 0.1);
 	border-radius: 8px;
-	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
 	padding: 8px;
 	font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
 	z-index: 999999998;
@@ -440,8 +455,9 @@ body {
 	box-sizing: border-box;
 
 	@media (prefers-color-scheme: dark) {
-		background: #252525;
+		background: rgba(35, 35, 35, 0.92);
 		border: 1px solid rgba(255, 255, 255, 0.1);
+		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 		color: #f0f0f0;
 	}
 
@@ -450,6 +466,19 @@ body {
 		flex-direction: column;
 		gap: 8px;
 		margin-bottom: 8px;
+	}
+
+	.obsidian-inline-tag {
+		color: #895DF4;
+		background: rgba(137, 93, 244, 0.12);
+		padding: 1px 4px;
+		border-radius: 4px;
+		font-weight: 500;
+		display: inline-block;
+		@media (prefers-color-scheme: dark) {
+			background: rgba(137, 93, 244, 0.25);
+			color: #A68AF9;
+		}
 	}
 
 	.obsidian-comment-item {
@@ -516,8 +545,12 @@ body {
 			
 			.obsidian-comment-timestamp {
 				font-size: 11px;
-				color: #999;
-				opacity: 0.8;
+				color: #777;
+				font-weight: 500;
+				
+				@media (prefers-color-scheme: dark) {
+					color: #aaa;
+				}
 			}
 		}
 
@@ -528,15 +561,15 @@ body {
 			button {
 				background: transparent;
 				border: none;
-				color: #666;
+				color: #555;
 				cursor: pointer;
 				padding: 2px;
 				border-radius: 4px;
 				display: flex;
-				opacity: 0.8;
+				opacity: 1;
 				
 				@media (prefers-color-scheme: dark) {
-					color: #aaa;
+					color: #ccc;
 				}
 
 				&:hover {

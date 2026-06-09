@@ -81,7 +81,7 @@ export function startAddingComment(highlightId: string) {
 	if (box) {
 		const textarea = box.querySelector('textarea');
 		if (textarea) {
-			textarea.focus();
+			textarea.focus({ preventScroll: true });
 		}
 	}
 }
@@ -262,6 +262,28 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 	box.addEventListener('mouseenter', () => showActiveRing(highlight.id));
 	box.addEventListener('mouseleave', () => hideActiveRing());
 
+	box.addEventListener('dblclick', (e) => {
+		const target = e.target as HTMLElement;
+		const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
+		if (textEl) {
+			const noteIndex = textEl.dataset.index;
+			if (noteIndex !== undefined) {
+				editingNoteKey = `${highlight.id}-${noteIndex}`;
+				expandedCommentIndexes.add(editingNoteKey);
+				renderCommentBoxes();
+				
+				// Focus the newly rendered textarea
+				setTimeout(() => {
+					const newBox = activeCommentBoxes.get(highlight.id);
+					if (newBox) {
+						const textarea = newBox.querySelector('.edit-comment-textarea') as HTMLTextAreaElement;
+						if (textarea) textarea.focus({ preventScroll: true });
+					}
+				}, 0);
+			}
+		}
+	});
+
 	return box;
 }
 
@@ -279,6 +301,9 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 			const parsed = parseNoteString(note);
 			const timeHtml = parsed.timestamp ? `<div class="obsidian-comment-timestamp">${formatTime(parsed.timestamp)}</div>` : '<div></div>';
 			
+			let displayHtml = escapeHtml(parsed.text);
+			displayHtml = displayHtml.replace(/(#[a-zA-Z0-9_-]+)/g, '<span class="obsidian-inline-tag">$1</span>');
+
 			if (isEditingThisNote) {
 				html += `
 					<div class="obsidian-comment-item">
@@ -295,7 +320,7 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 				html += `
 					<div class="obsidian-comment-item">
 						<div class="obsidian-comment-item-header">
-							<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${escapeHtml(parsed.text)}</div>
+							<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${displayHtml}</div>
 						</div>
 						<div class="obsidian-comment-item-footer">
 							${timeHtml}

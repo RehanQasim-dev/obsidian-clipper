@@ -227,6 +227,7 @@ export interface StoredData {
 }
 
 type HighlightsStorage = Record<string, StoredData>;
+export let currentHighlightColor: 'yellow' | 'red' | 'green' = 'yellow';
 
 export function updateHighlights(newHighlights: AnyHighlightData[]) {
 	const oldHighlights = [...highlights];
@@ -251,6 +252,7 @@ export function toggleHighlighterMenu(isActive: boolean) {
 		disableLinkClicks();
 		createHighlighterMenu();
 		addBrowserClassToHtml();
+		document.body.dataset.obsidianColor = currentHighlightColor;
 		browser.runtime.sendMessage({ action: "highlighterModeChanged", isActive: true });
 		applyHighlights();
 		// If the user had an active text selection before toggling on,
@@ -536,15 +538,18 @@ function enableLinkClicks() {
 // Click-to-highlight a block element (figure, picture, img, table, pre).
 // Text-containing blocks (paragraphs, headings, etc.) are not highlightable
 // by click — those go through selection → TextHighlightData instead.
-export function highlightElement(element: Element, notes?: string[]) {
-	if (!BLOCK_HIGHLIGHT_TAGS.has(element.tagName.toUpperCase())) return;
+export function highlightElement(element: Element, notes?: string[]): string | undefined {
+	if (!BLOCK_HIGHLIGHT_TAGS.has(element.tagName.toUpperCase())) return undefined;
+	const id = Date.now().toString();
 	addHighlight({
 		xpath: getElementXPath(element),
 		content: element.outerHTML,
 		type: 'element',
-		id: Date.now().toString(),
+		id,
+		color: currentHighlightColor,
 	}, notes);
 	markHighlightJustCreated();
+	return id;
 }
 
 // Handle text selection for highlighting
@@ -552,6 +557,8 @@ export function handleTextSelection(selection: Selection, notes?: string[]) {
 	if (selection.isCollapsed) return;
 	const range = selection.getRangeAt(0);
 	const newHighlightDatas = getHighlightRanges(range);
+
+	let returnedId: string | undefined;
 
 	if (newHighlightDatas.length > 0) {
 		const oldGlobalHighlights = [...highlights]; // Save global state BEFORE this operation
@@ -562,7 +569,7 @@ export function handleTextSelection(selection: Selection, notes?: string[]) {
 
 		for (const highlightData of newHighlightDatas) {
 			const beforeCount = currentBatchHighlights.length;
-			const newHighlightWithNotes = { ...highlightData, notes: notes || [] };
+			const newHighlightWithNotes = { ...highlightData, color: currentHighlightColor, notes: notes || [] };
 			currentBatchHighlights = mergeOverlappingHighlights(currentBatchHighlights, newHighlightWithNotes);
 			// If the array didn't grow, a merge happened — the new piece was
 			// absorbed into an existing highlight whose groupId we should adopt
@@ -583,6 +590,9 @@ export function handleTextSelection(selection: Selection, notes?: string[]) {
 			}
 		}
 
+		const firstXpath = newHighlightDatas[0].xpath;
+		returnedId = currentBatchHighlights.find(h => h.xpath === firstXpath)?.id;
+
 		highlights = currentBatchHighlights;
 		bumpHighlightsVersion();
 		addToHistory('add', oldGlobalHighlights, highlights);
@@ -592,6 +602,7 @@ export function handleTextSelection(selection: Selection, notes?: string[]) {
 		markHighlightJustCreated();
 	}
 	selection.removeAllRanges();
+	return returnedId;
 }
 
 // Split a user selection into one highlight per block it crosses.
@@ -1067,6 +1078,10 @@ export function updateHighlightColor(id: string, color: 'yellow' | 'red' | 'gree
 	} else {
 		highlight.color = color;
 	}
+	
+	currentHighlightColor = color;
+	document.body.dataset.obsidianColor = color;
+	
 	commitHighlightChanges();
 }
 
@@ -1255,6 +1270,12 @@ function handleKeyDown(event: KeyboardEvent) {
 			redo();
 		} else {
 			undo();
+		}
+	} else if (event.key === '1' || event.key === '2' || event.key === '3') {
+		if (document.body.classList.contains('obsidian-highlighter-active')) {
+			const colors: Array<'yellow' | 'red' | 'green'> = ['yellow', 'red', 'green'];
+			currentHighlightColor = colors[parseInt(event.key) - 1];
+			document.body.dataset.obsidianColor = currentHighlightColor;
 		}
 	}
 }

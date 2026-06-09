@@ -12,7 +12,7 @@ import {
 	updateHighlighterMenu,
 	updateHighlightColor,
 } from './highlighter';
-import { clearCommentBoxes } from './comment-overlays';
+import { clearCommentBoxes, startAddingComment } from './comment-overlays';
 import { throttle } from './throttle';
 import { getElementByXPath, isDarkColor, setElementHTML } from './dom-utils';
 import { getMessage } from './i18n';
@@ -176,7 +176,6 @@ function findTextHighlightAtPoint(x: number, y: number): string | null {
 // Shown on click/tap on any highlight, or on Alt+hover (desktop shortcut).
 // Positioned center-top above the highlight's bounding box.
 
-import { startAddingComment } from './comment-overlays';
 
 let highlightActionMenu: HTMLDivElement | null = null;
 let currentActionTargetId: string | null = null;
@@ -354,15 +353,21 @@ function handleHighlightClick(event: MouseEvent) {
 
 	const { clientX, clientY } = event;
 
+	const isCtrlPressed = event.ctrlKey || event.metaKey;
+
 	// Text highlight: hit-test stored Ranges.
 	const textId = findTextHighlightAtPoint(clientX, clientY);
 	if (textId) {
+		if (isCtrlPressed) startAddingComment(textId);
 		return;
 	}
 
 	// Element highlight overlay.
 	const overlay = findOverlayAtPoint(clientX, clientY);
 	if (overlay) {
+		if (isCtrlPressed && overlay.dataset.highlightId) {
+			startAddingComment(overlay.dataset.highlightId);
+		}
 		return;
 	}
 
@@ -402,7 +407,11 @@ export function handleMouseUp(event: MouseEvent | TouchEvent) {
 				}
 			}
 		}
-		handleTextSelection(selection);
+		const highlightId = handleTextSelection(selection);
+		const isCtrlPressed = event instanceof MouseEvent && (event.ctrlKey || event.metaKey);
+		if (highlightId && isCtrlPressed) {
+			startAddingComment(highlightId);
+		}
 		return;
 	}
 
@@ -411,7 +420,13 @@ export function handleMouseUp(event: MouseEvent | TouchEvent) {
 
 	// Block-level one-click highlight (figure, img, table, pre, picture).
 	const block = findBlockToHighlight(target);
-	if (block) highlightElement(block);
+	if (block) {
+		const isCtrlPressed = event instanceof MouseEvent && (event.ctrlKey || event.metaKey);
+		const highlightId = highlightElement(block);
+		if (highlightId && isCtrlPressed) {
+			startAddingComment(highlightId);
+		}
+	}
 }
 
 // Add touch start handler
