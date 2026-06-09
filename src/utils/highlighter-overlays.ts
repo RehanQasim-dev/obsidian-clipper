@@ -11,6 +11,7 @@ import {
 	updateHighlights,
 	updateHighlighterMenu,
 } from './highlighter';
+import { clearCommentBoxes } from './comment-overlays';
 import { throttle } from './throttle';
 import { getElementByXPath, isDarkColor, setElementHTML } from './dom-utils';
 import { getMessage } from './i18n';
@@ -21,7 +22,7 @@ let touchStartY: number = 0;
 let isTouchMoved: boolean = false;
 
 const IGNORED_BOUNDARY_SELECTOR =
-	'.obsidian-highlighter-menu, .obsidian-reader-settings, .transcript-segment > strong, .obsidian-highlight-delete, .obsidian-selection-action';
+	'.obsidian-highlighter-menu, .obsidian-reader-settings, .transcript-segment > strong, .obsidian-highlight-action-menu, .obsidian-comment-box, .obsidian-selection-action';
 
 // --- Custom Highlight API (for type: 'text' highlights) ---
 //
@@ -51,7 +52,7 @@ interface HighlightInstance {
 let userHighlight: HighlightInstance | null = null;
 // Map of highlight id → list of Ranges. One stored highlight may produce
 // multiple ranges in edge cases (future-proofing); today it's always one.
-const textHighlightRanges = new Map<string, Range[]>();
+export const textHighlightRanges = new Map<string, Range[]>();
 
 function getHighlightRegistry(): CSSHighlightsRegistry | null {
 	const registry = (CSS as unknown as { highlights?: CSSHighlightsRegistry }).highlights;
@@ -168,32 +169,59 @@ function findTextHighlightAtPoint(x: number, y: number): string | null {
 // Shown on click/tap on any highlight, or on Alt+hover (desktop shortcut).
 // Positioned center-top above the highlight's bounding box.
 
-let highlightDeleteButton: HTMLButtonElement | null = null;
-let currentDeleteTargetId: string | null = null;
-let deleteButtonShownViaAlt = false;
+import { startAddingComment } from './comment-overlays';
 
-function ensureHighlightDeleteButton(): HTMLButtonElement {
-	if (highlightDeleteButton) return highlightDeleteButton;
-	const btn = document.createElement('button');
-	btn.type = 'button';
-	btn.className = 'obsidian-highlight-delete';
-	btn.setAttribute('aria-label', getMessage('remove'));
-	setElementHTML(btn, `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg><span>${getMessage('remove')}</span>`);
-	btn.style.display = 'none';
-	btn.addEventListener('mousedown', e => e.stopPropagation());
-	btn.addEventListener('click', (e) => {
+let highlightActionMenu: HTMLDivElement | null = null;
+let currentActionTargetId: string | null = null;
+let actionMenuShownViaAlt = false;
+
+function ensureHighlightActionMenu(): HTMLDivElement {
+	if (highlightActionMenu) return highlightActionMenu;
+	
+	const menu = document.createElement('div');
+	menu.className = 'obsidian-highlight-action-menu';
+	menu.style.display = 'none';
+	menu.style.position = 'absolute';
+	menu.style.zIndex = '2147483647';
+	menu.style.gap = '4px';
+
+	const commentBtn = document.createElement('button');
+	commentBtn.type = 'button';
+	commentBtn.className = 'obsidian-highlight-comment';
+	commentBtn.setAttribute('aria-label', getMessage('addComment') || 'Add Comment');
+	setElementHTML(commentBtn, `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`);
+	commentBtn.addEventListener('mousedown', e => e.stopPropagation());
+	commentBtn.addEventListener('click', (e) => {
 		e.stopPropagation();
 		e.preventDefault();
-		if (currentDeleteTargetId) {
-			void deleteHighlightById(currentDeleteTargetId);
+		if (currentActionTargetId) {
+			startAddingComment(currentActionTargetId);
+			hideHighlightActionMenu();
 		}
 	});
-	document.body.appendChild(btn);
-	highlightDeleteButton = btn;
-	return btn;
+
+	const deleteBtn = document.createElement('button');
+	deleteBtn.type = 'button';
+	deleteBtn.className = 'obsidian-highlight-delete';
+	deleteBtn.setAttribute('aria-label', getMessage('remove') || 'Remove');
+	setElementHTML(deleteBtn, `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>`);
+	deleteBtn.addEventListener('mousedown', e => e.stopPropagation());
+	deleteBtn.addEventListener('click', (e) => {
+		e.stopPropagation();
+		e.preventDefault();
+		if (currentActionTargetId) {
+			void deleteHighlightById(currentActionTargetId);
+		}
+	});
+
+	menu.appendChild(commentBtn);
+	menu.appendChild(deleteBtn);
+	document.body.appendChild(menu);
+	highlightActionMenu = menu;
+	return menu;
 }
 
-function showHighlightDeleteButtonForText(id: string): void {
+function showHighlightActionMenuForText(id: string): void {
 	const ranges = textHighlightRanges.get(id);
 	if (!ranges || ranges.length === 0) return;
 	const rects = ranges[0].getClientRects();
@@ -205,30 +233,30 @@ function showHighlightDeleteButtonForText(id: string): void {
 		if (rects[i].right > right) right = rects[i].right;
 		if (rects[i].top < top) top = rects[i].top;
 	}
-	positionDeleteButton(id, (left + right) / 2, top);
+	positionActionMenu(id, (left + right) / 2, top);
 }
 
-function showHighlightDeleteButtonForOverlay(overlay: HTMLElement): void {
+function showHighlightActionMenuForOverlay(overlay: HTMLElement): void {
 	const id = overlay.dataset.highlightId;
 	if (!id) return;
 	const rect = overlay.getBoundingClientRect();
-	positionDeleteButton(id, (rect.left + rect.right) / 2, rect.top);
+	positionActionMenu(id, (rect.left + rect.right) / 2, rect.top);
 }
 
-function positionDeleteButton(id: string, centerX: number, top: number): void {
-	const btn = ensureHighlightDeleteButton();
-	currentDeleteTargetId = id;
-	btn.style.display = 'flex';
-	const btnWidth = btn.offsetWidth || 80;
-	const idealLeft = centerX - btnWidth / 2;
-	const clampedLeft = Math.max(4, Math.min(idealLeft, window.innerWidth - btnWidth - 4));
-	btn.style.left = `${clampedLeft + window.scrollX}px`;
-	btn.style.top = `${top + window.scrollY - 28}px`;
+function positionActionMenu(id: string, centerX: number, top: number): void {
+	const menu = ensureHighlightActionMenu();
+	currentActionTargetId = id;
+	menu.style.display = 'flex';
+	const menuWidth = menu.offsetWidth || 80;
+	const idealLeft = centerX - menuWidth / 2;
+	const clampedLeft = Math.max(4, Math.min(idealLeft, window.innerWidth - menuWidth - 4));
+	menu.style.left = `${clampedLeft + window.scrollX}px`;
+	menu.style.top = `${top + window.scrollY - 32}px`;
 }
 
-export function hideHighlightDeleteButton(): void {
-	if (highlightDeleteButton) highlightDeleteButton.style.display = 'none';
-	currentDeleteTargetId = null;
+export function hideHighlightActionMenu(): void {
+	if (highlightActionMenu) highlightActionMenu.style.display = 'none';
+	currentActionTargetId = null;
 }
 
 async function deleteHighlightById(id: string): Promise<void> {
@@ -241,7 +269,7 @@ async function deleteHighlightById(id: string): Promise<void> {
 		: highlights.filter((h: AnyHighlightData) => h.id !== id);
 	if (next.length === highlights.length) return;
 	updateHighlights(next);
-	hideHighlightDeleteButton();
+	hideHighlightActionMenu();
 	sortHighlights();
 	applyHighlights();
 	saveHighlights();
@@ -271,8 +299,8 @@ export function markHighlightJustCreated(): void {
 function handleHighlightClick(event: MouseEvent) {
 	const target = event.target as Element | null;
 
-	// Clicking the remove button, selection button, or a link — let native behavior run.
-	if (target?.closest('.obsidian-highlight-delete, .obsidian-selection-action, a[href]')) return;
+	// Clicking the action menu, selection button, or a link — let native behavior run.
+	if (target?.closest('.obsidian-highlight-action-menu, .obsidian-selection-action, a[href]')) return;
 
 	// Don't show the remove button immediately after creating a highlight —
 	// the click that ends a drag-selection shouldn't also surface "Remove".
@@ -283,18 +311,18 @@ function handleHighlightClick(event: MouseEvent) {
 	// Text highlight: hit-test stored Ranges.
 	const textId = findTextHighlightAtPoint(clientX, clientY);
 	if (textId) {
-		showHighlightDeleteButtonForText(textId);
+		showHighlightActionMenuForText(textId);
 		return;
 	}
 
 	// Element highlight overlay.
 	const overlay = findOverlayAtPoint(clientX, clientY);
 	if (overlay) {
-		showHighlightDeleteButtonForOverlay(overlay);
+		showHighlightActionMenuForOverlay(overlay);
 		return;
 	}
 
-	hideHighlightDeleteButton();
+	hideHighlightActionMenu();
 }
 
 // Handle mouse up — create highlight from selection, or from block click.
@@ -334,8 +362,8 @@ export function handleMouseUp(event: MouseEvent | TouchEvent) {
 		return;
 	}
 
-	// Delete button / selection action button — let their own handlers run.
-	if (target.closest('.obsidian-highlight-delete, .obsidian-selection-action')) return;
+	// Action menu / selection action button — let their own handlers run.
+	if (target.closest('.obsidian-highlight-action-menu, .obsidian-selection-action')) return;
 
 	// Block-level one-click highlight (figure, img, table, pre, picture).
 	const block = findBlockToHighlight(target);
@@ -413,7 +441,7 @@ const throttledUpdateHighlights = throttle(() => {
 	if (!isApplyingHighlights) updateHighlightOverlayPositions();
 }, 100);
 
-window.addEventListener('resize', () => { throttledUpdateHighlights(); hideHighlightDeleteButton(); });
+window.addEventListener('resize', () => { throttledUpdateHighlights(); hideHighlightActionMenu(); });
 window.addEventListener('scroll', throttledUpdateHighlights);
 
 // Mutation observer re-positions element overlays when the page reflows.
@@ -448,15 +476,15 @@ function handleHighlightHover(event: MouseEvent) {
 		const cursor = onHighlight ? 'pointer' : '';
 		if (cursor !== lastCursor) { document.body.style.cursor = cursor; lastCursor = cursor; }
 
-		const onButton = !!target?.closest('.obsidian-highlight-delete');
+		const onButton = !!target?.closest('.obsidian-highlight-action-menu');
 
 		if (altKey && (onHighlight || onButton)) {
-			if (textId) showHighlightDeleteButtonForText(textId);
-			else if (overlay) showHighlightDeleteButtonForOverlay(overlay);
-			deleteButtonShownViaAlt = true;
-		} else if (deleteButtonShownViaAlt) {
-			hideHighlightDeleteButton();
-			deleteButtonShownViaAlt = false;
+			if (textId) showHighlightActionMenuForText(textId);
+			else if (overlay) showHighlightActionMenuForOverlay(overlay);
+			actionMenuShownViaAlt = true;
+		} else if (actionMenuShownViaAlt) {
+			hideHighlightActionMenu();
+			actionMenuShownViaAlt = false;
 		}
 	});
 }
@@ -480,7 +508,7 @@ export function syncHoverListener(): void {
 		document.removeEventListener('mousemove', handleHighlightHover);
 		document.body.style.cursor = '';
 		listenersAttached = false;
-		hideHighlightDeleteButton();
+		hideHighlightActionMenu();
 	}
 	if (needed && !observerAttached) {
 		observer.observe(document.body, {
@@ -501,5 +529,6 @@ export function syncHoverListener(): void {
 export function removeExistingHighlights() {
 	document.querySelectorAll('.obsidian-highlight-overlay').forEach(el => el.remove());
 	clearTextHighlights();
-	hideHighlightDeleteButton();
+	hideHighlightActionMenu();
+	clearCommentBoxes();
 }
