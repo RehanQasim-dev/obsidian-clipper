@@ -77,13 +77,17 @@ function getHighlightBlockRect(highlight: AnyHighlightData): DOMRect | null {
 export function startAddingComment(highlightId: string) {
 	editingHighlightIds.add(highlightId);
 	renderCommentBoxes();
-	const box = activeCommentBoxes.get(highlightId);
-	if (box) {
-		const textarea = box.querySelector('textarea');
-		if (textarea) {
-			textarea.focus({ preventScroll: true });
+	
+	// Defer focus slightly so that browser events (like mouseup/click resolution) don't steal focus
+	setTimeout(() => {
+		const box = activeCommentBoxes.get(highlightId);
+		if (box) {
+			const textarea = box.querySelector('textarea');
+			if (textarea) {
+				textarea.focus({ preventScroll: true });
+			}
 		}
-	}
+	}, 50);
 }
 
 export function stopAddingComment(highlightId: string) {
@@ -412,6 +416,7 @@ function deleteComment(highlightId: string, index: number) {
 		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
+		hideActiveRing(); // Hide the ring in case the comment box is completely removed
 		renderCommentBoxes();
 	}
 }
