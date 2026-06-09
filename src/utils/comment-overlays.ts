@@ -10,6 +10,7 @@ let activeCommentBoxes = new Map<string, HTMLElement>();
 let editingHighlightIds = new Set<string>();
 let expandedCommentIndexes = new Set<string>(); // highlightId-index
 let editingNoteKey: string | null = null; // highlightId-index
+let singleClickTimer: number | null = null; // disambiguates single- vs double-click on a comment
 
 // Last innerHTML rendered into each box. renderCommentBoxes() runs on every
 // highlight mutation, storage sync, scroll-driven reapply, etc. Rebuilding
@@ -95,6 +96,7 @@ export function startAddingComment(highlightId: string) {
 			const textarea = box.querySelector('textarea');
 			if (textarea) {
 				textarea.focus({ preventScroll: true });
+				autosizeTextarea(textarea);
 			}
 		}
 	}, 50);
@@ -224,6 +226,58 @@ export function renderCommentBoxes() {
 	});
 }
 
+// Grow a textarea to fit its content so the whole comment is visible without
+// an inner scrollbar while typing.
+function autosizeTextarea(ta: HTMLTextAreaElement) {
+	ta.style.height = 'auto';
+	ta.style.height = `${ta.scrollHeight}px`;
+}
+
+// Wrap (or insert markers around) the current selection for Cmd/Ctrl+B / +I.
+// With no selection, drops empty markers and parks the caret between them.
+function wrapSelection(ta: HTMLTextAreaElement, marker: string) {
+	const { selectionStart: s, selectionEnd: e, value } = ta;
+	const selected = value.slice(s, e);
+	ta.value = value.slice(0, s) + marker + selected + marker + value.slice(e);
+	if (selected) {
+		ta.setSelectionRange(s + marker.length, e + marker.length);
+	} else {
+		ta.setSelectionRange(s + marker.length, s + marker.length);
+	}
+}
+
+// editingNoteKey is `${highlightId}-${index}`. Highlight ids never contain '-'
+// (they're timestamps or `<ts>_tx_<n>` style), so split on the last dash.
+function parseNoteKey(key: string): { highlightId: string; index: number } {
+	const dash = key.lastIndexOf('-');
+	return { highlightId: key.slice(0, dash), index: parseInt(key.slice(dash + 1)) };
+}
+
+// Render a small, safe subset of inline markdown in *displayed* comments:
+// [text](http(s) url), **bold**, *italic*. Input is already HTML-escaped, so
+// only the tags we emit here are live HTML. Links are restricted to http(s).
+function renderInlineMarkdown(escaped: string): string {
+	return escaped
+		.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+		.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+		.replace(/\*([^*\s][^*]*?)\*/g, '<em>$1</em>');
+}
+
+// After entering edit mode, size the editor to the full comment, focus it, and
+// drop the caret at the end so the user types after the last character.
+function focusEditTextarea(highlightId: string) {
+	setTimeout(() => {
+		const box = activeCommentBoxes.get(highlightId);
+		if (!box) return;
+		const ta = box.querySelector('.edit-comment-textarea') as HTMLTextAreaElement | null;
+		if (!ta) return;
+		autosizeTextarea(ta);
+		ta.focus({ preventScroll: true });
+		const end = ta.value.length;
+		ta.setSelectionRange(end, end);
+	}, 0);
+}
+
 function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 	const box = document.createElement('div');
 	box.className = 'obsidian-comment-box';
@@ -244,8 +298,8 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		} else if (target.closest('.obsidian-comment-save-edit')) {
 			const textarea = box.querySelector('textarea.edit-comment-textarea') as HTMLTextAreaElement;
 			if (textarea && editingNoteKey) {
-				const [hId, indexStr] = editingNoteKey.split('-');
-				saveEditedComment(hId, parseInt(indexStr), textarea.value.trim());
+				const { highlightId, index } = parseNoteKey(editingNoteKey);
+				saveEditedComment(highlightId, index, textarea.value.trim());
 			}
 		} else if (target.closest('.obsidian-comment-cancel')) {
 			stopAddingComment(highlight.id);
@@ -256,6 +310,7 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 			const noteIndex = parseInt((target.closest('.obsidian-comment-edit') as HTMLElement).dataset.index || '0');
 			editingNoteKey = `${highlight.id}-${noteIndex}`;
 			renderCommentBoxes();
+			focusEditTextarea(highlight.id);
 		} else if (target.closest('.obsidian-comment-delete')) {
 			const noteIndex = parseInt((target.closest('.obsidian-comment-delete') as HTMLElement).dataset.index || '0');
 			deleteComment(highlight.id, noteIndex);
@@ -263,13 +318,20 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 			const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 			const noteIndex = textEl.dataset.index;
 			const expandKey = `${highlight.id}-${noteIndex}`;
-			if (expandedCommentIndexes.has(expandKey)) {
-				expandedCommentIndexes.delete(expandKey);
-			} else if (textEl.classList.contains('has-overflow')) {
-				// Only expand if it actually overflows
-				expandedCommentIndexes.add(expandKey);
-			}
-			renderCommentBoxes();
+			// A double-click always fires two `click` events first. Defer the
+			// expand/collapse so the dblclick handler (edit mode) can cancel it —
+			// otherwise a single click would toggle expansion under the edit.
+			if (singleClickTimer) clearTimeout(singleClickTimer);
+			singleClickTimer = window.setTimeout(() => {
+				singleClickTimer = null;
+				if (expandedCommentIndexes.has(expandKey)) {
+					expandedCommentIndexes.delete(expandKey);
+				} else if (textEl.classList.contains('has-overflow')) {
+					// Only expand if it actually overflows
+					expandedCommentIndexes.add(expandKey);
+				}
+				renderCommentBoxes();
+			}, 250);
 		}
 	});
 
@@ -280,21 +342,56 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		const target = e.target as HTMLElement;
 		const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 		if (textEl) {
+			// Cancel the pending single-click expand/collapse so a double-click
+			// only enters edit mode.
+			if (singleClickTimer) {
+				clearTimeout(singleClickTimer);
+				singleClickTimer = null;
+			}
 			const noteIndex = textEl.dataset.index;
 			if (noteIndex !== undefined) {
 				editingNoteKey = `${highlight.id}-${noteIndex}`;
 				expandedCommentIndexes.add(editingNoteKey);
 				renderCommentBoxes();
-				
-				// Focus the newly rendered textarea
-				setTimeout(() => {
-					const newBox = activeCommentBoxes.get(highlight.id);
-					if (newBox) {
-						const textarea = newBox.querySelector('.edit-comment-textarea') as HTMLTextAreaElement;
-						if (textarea) textarea.focus({ preventScroll: true });
-					}
-				}, 0);
+				focusEditTextarea(highlight.id);
 			}
+		}
+	});
+
+	// Keep the editor sized to its content as the user types.
+	box.addEventListener('input', (e) => {
+		const ta = e.target as HTMLElement;
+		if (ta instanceof HTMLTextAreaElement &&
+			(ta.classList.contains('edit-comment-textarea') || ta.classList.contains('new-comment-textarea'))) {
+			autosizeTextarea(ta);
+		}
+	});
+
+	// Editor keyboard shortcuts: Escape commits the comment (delete uses the
+	// trash button), Cmd/Ctrl+B / +I wrap the selection in markdown.
+	box.addEventListener('keydown', (e) => {
+		const ta = e.target;
+		if (!(ta instanceof HTMLTextAreaElement)) return;
+		const isNew = ta.classList.contains('new-comment-textarea');
+		const isEdit = ta.classList.contains('edit-comment-textarea');
+		if (!isNew && !isEdit) return;
+
+		if (e.key === 'Escape') {
+			e.preventDefault();
+			e.stopPropagation(); // don't let highlighter mode exit on Escape
+			if (isNew) {
+				saveComment(highlight.id, ta.value.trim());
+			} else if (editingNoteKey) {
+				const { highlightId, index } = parseNoteKey(editingNoteKey);
+				saveEditedComment(highlightId, index, ta.value.trim());
+			}
+			return;
+		}
+
+		if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'i' || e.key === 'B' || e.key === 'I')) {
+			e.preventDefault();
+			wrapSelection(ta, e.key.toLowerCase() === 'b' ? '**' : '*');
+			autosizeTextarea(ta);
 		}
 	});
 
@@ -316,7 +413,10 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 			const timeHtml = parsed.timestamp ? `<div class="obsidian-comment-timestamp">${formatTime(parsed.timestamp)}</div>` : '<div></div>';
 			
 			let displayHtml = escapeHtml(parsed.text);
-			displayHtml = displayHtml.replace(/(#[a-zA-Z0-9_-]+)/g, '<span class="obsidian-inline-tag">$1</span>');
+			displayHtml = renderInlineMarkdown(displayHtml);
+			// Require a boundary before '#' so it tags real hashtags but not the
+			// fragment in a URL like http://x#section.
+			displayHtml = displayHtml.replace(/(^|\s)(#[a-zA-Z0-9_-]+)/g, '$1<span class="obsidian-inline-tag">$2</span>');
 
 			if (isEditingThisNote) {
 				html += `
@@ -448,6 +548,21 @@ export function clearCommentBoxes() {
 	document.body.style.paddingRight = '';
 	document.body.style.paddingLeft = '';
 	hideActiveRing();
+}
+
+// Emphasize the comment box tied to a highlight (e.g. while hovering that
+// highlight's text) so it's visually distinguishable from the other boxes.
+// Pass null to clear. Guarded so we only touch the DOM on an actual change.
+let emphasizedBoxId: string | null = null;
+export function emphasizeCommentBox(highlightId: string | null) {
+	if (emphasizedBoxId === highlightId) return;
+	if (emphasizedBoxId) {
+		activeCommentBoxes.get(emphasizedBoxId)?.classList.remove('is-active');
+	}
+	emphasizedBoxId = highlightId;
+	if (highlightId) {
+		activeCommentBoxes.get(highlightId)?.classList.add('is-active');
+	}
 }
 
 let activeRings: HTMLDivElement[] = [];

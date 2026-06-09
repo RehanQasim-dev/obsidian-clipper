@@ -325,6 +325,15 @@ body.obsidian-highlighter-active {
 		mix-blend-mode: screen;
 		background-color: rgba(255, 235, 0, 0.25);
 	}
+
+	// Image highlights: outline only, no color wash over the picture.
+	&.obsidian-highlight-overlay-image {
+		background-color: transparent !important;
+		mix-blend-mode: normal;
+		border: 2px solid rgb(255, 235, 0); // default yellow
+		&.color-red { border-color: rgb(255, 99, 132); }
+		&.color-green { border-color: rgb(75, 192, 120); }
+	}
 }
 
 // CSS Custom Highlight API: paints text-type highlights without DOM mutation.
@@ -453,12 +462,25 @@ body {
 	z-index: 999999998;
 	color: #333;
 	box-sizing: border-box;
+	transition: box-shadow 0.15s ease, border-color 0.15s ease;
 
 	@media (prefers-color-scheme: dark) {
 		background: rgba(35, 35, 35, 0.92);
 		border: 1px solid rgba(255, 255, 255, 0.1);
 		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
 		color: #f0f0f0;
+	}
+
+	// Emphasized when its highlight (or the box itself) is hovered, so the
+	// user can tell which note belongs to which highlight.
+	&.is-active {
+		border-color: #895DF4;
+		box-shadow: 0 0 0 2px rgba(137, 93, 244, 0.35), 0 6px 20px rgba(0, 0, 0, 0.12);
+
+		@media (prefers-color-scheme: dark) {
+			border-color: #A68AF9;
+			box-shadow: 0 0 0 2px rgba(137, 93, 244, 0.55), 0 6px 20px rgba(0, 0, 0, 0.25);
+		}
 	}
 
 	.obsidian-comment-list {
@@ -497,6 +519,14 @@ body {
 			line-height: 1.4;
 			word-break: break-word;
 			flex-grow: 1;
+
+			a {
+				color: #895DF4;
+				text-decoration: underline;
+				@media (prefers-color-scheme: dark) { color: #A68AF9; }
+			}
+			strong { font-weight: 700; }
+			em { font-style: italic; }
 
 			&.is-collapsed {
 				display: -webkit-box;
