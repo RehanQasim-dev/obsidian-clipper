@@ -12,6 +12,7 @@ import {
 import { detectBrowser, addBrowserClassToHtml } from './browser-detection';
 import dayjs from 'dayjs';
 import { generalSettings, loadSettings } from './storage-utils';
+import { renderCommentBoxes, clearCommentBoxes } from './comment-overlays';
 
 /**
  * Helper function to create SVG elements
@@ -203,6 +204,7 @@ export interface HighlightData {
 	xpath: string;
 	content: string;
 	notes?: string[]; // Annotations
+	color?: 'yellow' | 'red' | 'green'; // Highlight color
 	// When one selection crosses multiple blocks, all resulting highlights
 	// share a groupId so they delete, clip, and visually associate together.
 	groupId?: string;
@@ -1045,6 +1047,7 @@ export function applyHighlights() {
 	lastAppliedVersion = highlightsVersion;
 	isApplyingHighlights = false;
 	syncHoverListener();
+	renderCommentBoxes();
 }
 
 // Apply, save, and update UI after highlight changes.
@@ -1053,6 +1056,18 @@ function commitHighlightChanges() {
 	applyHighlights();
 	saveHighlights();
 	updateHighlighterMenu();
+}
+
+export function updateHighlightColor(id: string, color: 'yellow' | 'red' | 'green') {
+	const highlight = highlights.find(h => h.id === id);
+	if (!highlight) return;
+	
+	if (highlight.groupId) {
+		highlights.filter(h => h.groupId === highlight.groupId).forEach(h => h.color = color);
+	} else {
+		highlight.color = color;
+	}
+	commitHighlightChanges();
 }
 
 export function getHighlights(): string[] {

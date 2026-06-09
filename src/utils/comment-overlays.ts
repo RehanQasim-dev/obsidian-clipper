@@ -2,13 +2,27 @@ import { AnyHighlightData, highlights, saveHighlights, updateHighlights } from '
 import { getElementByXPath } from './dom-utils';
 import { textHighlightRanges } from './highlighter-overlays';
 
-const COMMENT_BOX_WIDTH = 280;
+const COMMENT_BOX_WIDTH = 320;
 const COMMENT_BOX_MARGIN = 20;
 const COMMENT_BOX_GAP = 12;
 
 let activeCommentBoxes = new Map<string, HTMLElement>();
 let editingHighlightIds = new Set<string>();
 let expandedCommentIndexes = new Set<string>(); // highlightId-index
+let editingNoteKey: string | null = null; // highlightId-index
+
+function parseNoteString(note: string): { text: string, timestamp?: number } {
+	const match = note.match(/([\s\S]*?)(?:<!--timestamp:(\d+)-->)?$/);
+	return {
+		text: match ? match[1].trim() : note.trim(),
+		timestamp: match && match[2] ? parseInt(match[2]) : undefined
+	};
+}
+
+function formatTime(ts: number): string {
+	const d = new Date(ts);
+	return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
 
 function getHighlightTopPosition(highlight: AnyHighlightData): number | null {
 	if (highlight.type === 'text') {
@@ -208,13 +222,26 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 	box.addEventListener('click', (e) => {
 		const target = e.target as HTMLElement;
 		if (target.closest('.obsidian-comment-save')) {
-			const textarea = box.querySelector('textarea') as HTMLTextAreaElement;
+			const textarea = box.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement;
 			if (textarea) {
 				const text = textarea.value.trim();
 				saveComment(highlight.id, text);
 			}
+		} else if (target.closest('.obsidian-comment-save-edit')) {
+			const textarea = box.querySelector('textarea.edit-comment-textarea') as HTMLTextAreaElement;
+			if (textarea && editingNoteKey) {
+				const [hId, indexStr] = editingNoteKey.split('-');
+				saveEditedComment(hId, parseInt(indexStr), textarea.value.trim());
+			}
 		} else if (target.closest('.obsidian-comment-cancel')) {
 			stopAddingComment(highlight.id);
+		} else if (target.closest('.obsidian-comment-cancel-edit')) {
+			editingNoteKey = null;
+			renderCommentBoxes();
+		} else if (target.closest('.obsidian-comment-edit')) {
+			const noteIndex = parseInt((target.closest('.obsidian-comment-edit') as HTMLElement).dataset.index || '0');
+			editingNoteKey = `${highlight.id}-${noteIndex}`;
+			renderCommentBoxes();
 		} else if (target.closest('.obsidian-comment-delete')) {
 			const noteIndex = parseInt((target.closest('.obsidian-comment-delete') as HTMLElement).dataset.index || '0');
 			deleteComment(highlight.id, noteIndex);
@@ -248,14 +275,42 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 		html += `<div class="obsidian-comment-list">`;
 		notes.forEach((note, index) => {
 			const isExpanded = expandedCommentIndexes.has(`${highlight.id}-${index}`);
-			html += `
-				<div class="obsidian-comment-item">
-					<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${escapeHtml(note)}</div>
-					<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete comment">
-						<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-					</button>
-				</div>
-			`;
+			const isEditingThisNote = editingNoteKey === `${highlight.id}-${index}`;
+			const parsed = parseNoteString(note);
+			const timeHtml = parsed.timestamp ? `<div class="obsidian-comment-timestamp">${formatTime(parsed.timestamp)}</div>` : '<div></div>';
+			
+			if (isEditingThisNote) {
+				html += `
+					<div class="obsidian-comment-item">
+						<div class="obsidian-comment-editor">
+							<textarea class="edit-comment-textarea" rows="3">${escapeHtml(parsed.text)}</textarea>
+							<div class="obsidian-comment-actions">
+								<button class="obsidian-comment-cancel-edit">Cancel</button>
+								<button class="obsidian-comment-save-edit mod-cta">Save</button>
+							</div>
+						</div>
+					</div>
+				`;
+			} else {
+				html += `
+					<div class="obsidian-comment-item">
+						<div class="obsidian-comment-item-header">
+							<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${escapeHtml(parsed.text)}</div>
+						</div>
+						<div class="obsidian-comment-item-footer">
+							${timeHtml}
+							<div class="obsidian-comment-actions-inline">
+								<button class="obsidian-comment-edit" data-index="${index}" aria-label="Edit comment">
+									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+								</button>
+								<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete comment">
+									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+								</button>
+							</div>
+						</div>
+					</div>
+				`;
+			}
 		});
 		html += `</div>`;
 	}
@@ -263,14 +318,14 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 	if (isEditing) {
 		html += `
 			<div class="obsidian-comment-editor">
-				<textarea placeholder="Add a comment..." rows="3"></textarea>
+				<textarea class="new-comment-textarea" placeholder="Add a comment..." rows="3"></textarea>
 				<div class="obsidian-comment-actions">
 					<button class="obsidian-comment-cancel">Cancel</button>
 					<button class="obsidian-comment-save mod-cta">Save</button>
 				</div>
 			</div>
 		`;
-	} else {
+	} else if (!editingNoteKey?.startsWith(highlight.id + '-')) {
 		html += `
 			<button class="obsidian-comment-add-more" onclick="window.dispatchEvent(new CustomEvent('obsidian-add-comment', {detail: '${highlight.id}'}))">
 				Add reply...
@@ -291,16 +346,38 @@ function saveComment(highlightId: string, text: string) {
 		return;
 	}
 	
+	const formattedText = `${text}<!--timestamp:${Date.now()}-->`;
+	
 	const highlight = highlights.find(h => h.id === highlightId);
 	if (highlight) {
 		if (!highlight.notes) highlight.notes = [];
-		highlight.notes.push(text);
+		highlight.notes.push(formattedText);
 		// Update global highlights array
 		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 	}
 	stopAddingComment(highlightId);
+}
+
+function saveEditedComment(highlightId: string, index: number, text: string) {
+	editingNoteKey = null;
+	if (!text) {
+		renderCommentBoxes();
+		return;
+	}
+	
+	const highlight = highlights.find(h => h.id === highlightId);
+	if (highlight && highlight.notes) {
+		const oldParsed = parseNoteString(highlight.notes[index]);
+		const ts = oldParsed.timestamp || Date.now();
+		highlight.notes[index] = `${text}<!--timestamp:${ts}-->`;
+		
+		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
+		updateHighlights(newHighlights);
+		saveHighlights();
+		renderCommentBoxes();
+	}
 }
 
 function deleteComment(highlightId: string, index: number) {

@@ -10,6 +10,7 @@ import {
 	saveHighlights,
 	updateHighlights,
 	updateHighlighterMenu,
+	updateHighlightColor,
 } from './highlighter';
 import { clearCommentBoxes } from './comment-overlays';
 import { throttle } from './throttle';
@@ -49,7 +50,7 @@ interface HighlightInstance {
 	priority: number;
 }
 
-let userHighlight: HighlightInstance | null = null;
+const HIGHLIGHT_INSTANCES = new Map<string, HighlightInstance>();
 // Map of highlight id → list of Ranges. One stored highlight may produce
 // multiple ranges in edge cases (future-proofing); today it's always one.
 export const textHighlightRanges = new Map<string, Range[]>();
@@ -60,8 +61,7 @@ function getHighlightRegistry(): CSSHighlightsRegistry | null {
 }
 
 let highlightApiWarned = false;
-function ensureUserHighlight(): HighlightInstance | null {
-	if (userHighlight) return userHighlight;
+function ensureUserHighlight(color: string = 'yellow'): HighlightInstance | null {
 	const registry = getHighlightRegistry();
 	const HighlightCtor = (window as unknown as { Highlight?: new () => HighlightInstance }).Highlight;
 	if (!registry || !HighlightCtor) {
@@ -71,9 +71,16 @@ function ensureUserHighlight(): HighlightInstance | null {
 		}
 		return null;
 	}
-	userHighlight = new HighlightCtor();
+	
+	const name = `obsidian-highlight-${color}`;
+	if (HIGHLIGHT_INSTANCES.has(name)) {
+		return HIGHLIGHT_INSTANCES.get(name)!;
+	}
+
+	const userHighlight = new HighlightCtor();
 	userHighlight.priority = USER_HIGHLIGHT_PRIORITY;
-	registry.set(USER_HIGHLIGHT_NAME, userHighlight);
+	registry.set(name, userHighlight);
+	HIGHLIGHT_INSTANCES.set(name, userHighlight);
 	return userHighlight;
 }
 
@@ -104,8 +111,8 @@ function findTextNodeAtOffset(element: Element, offset: number): { node: Node, o
 	return null;
 }
 
-export function renderTextHighlight(highlight: { id: string; xpath: string; startOffset: number; endOffset: number }): void {
-	const hl = ensureUserHighlight();
+export function renderTextHighlight(highlight: { id: string; xpath: string; startOffset: number; endOffset: number; color?: string }): void {
+	const hl = ensureUserHighlight(highlight.color || 'yellow');
 	if (!hl) return;
 	const container = getElementByXPath(highlight.xpath);
 	if (!container) return;
@@ -127,7 +134,7 @@ export function renderTextHighlight(highlight: { id: string; xpath: string; star
 }
 
 export function clearTextHighlights(): void {
-	userHighlight?.clear();
+	HIGHLIGHT_INSTANCES.forEach(hl => hl.clear());
 	textHighlightRanges.clear();
 }
 
@@ -184,6 +191,26 @@ function ensureHighlightActionMenu(): HTMLDivElement {
 	menu.style.position = 'absolute';
 	menu.style.zIndex = '2147483647';
 	menu.style.gap = '4px';
+	
+	const colorPicker = document.createElement('div');
+	colorPicker.className = 'obsidian-highlight-color-picker';
+	colorPicker.style.display = 'flex';
+	colorPicker.style.gap = '4px';
+	colorPicker.style.padding = '4px';
+	colorPicker.style.borderRight = '1px solid rgba(0,0,0,0.1)';
+	
+	const colors: Array<'yellow' | 'red' | 'green'> = ['yellow', 'red', 'green'];
+	colors.forEach(color => {
+		const btn = document.createElement('button');
+		btn.className = `obsidian-highlight-color-btn color-${color}`;
+		btn.setAttribute('aria-label', `Color ${color}`);
+		btn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			e.preventDefault();
+			if (currentActionTargetId) updateHighlightColor(currentActionTargetId, color);
+		});
+		colorPicker.appendChild(btn);
+	});
 
 	const commentBtn = document.createElement('button');
 	commentBtn.type = 'button';
@@ -214,8 +241,21 @@ function ensureHighlightActionMenu(): HTMLDivElement {
 		}
 	});
 
+	menu.appendChild(colorPicker);
 	menu.appendChild(commentBtn);
 	menu.appendChild(deleteBtn);
+	
+	// Menu hover keeps it alive
+	menu.addEventListener('mouseenter', () => {
+		if (actionMenuHideTimeout) {
+			clearTimeout(actionMenuHideTimeout);
+			actionMenuHideTimeout = null;
+		}
+	});
+	menu.addEventListener('mouseleave', () => {
+		actionMenuHideTimeout = window.setTimeout(hideHighlightActionMenu, 300);
+	});
+
 	document.body.appendChild(menu);
 	highlightActionMenu = menu;
 	return menu;
@@ -254,9 +294,15 @@ function positionActionMenu(id: string, centerX: number, top: number): void {
 	menu.style.top = `${top + window.scrollY - 32}px`;
 }
 
+export let actionMenuHideTimeout: number | null = null;
 export function hideHighlightActionMenu(): void {
 	if (highlightActionMenu) highlightActionMenu.style.display = 'none';
 	currentActionTargetId = null;
+	actionMenuShownViaAlt = false;
+	if (actionMenuHideTimeout) {
+		clearTimeout(actionMenuHideTimeout);
+		actionMenuHideTimeout = null;
+	}
 }
 
 async function deleteHighlightById(id: string): Promise<void> {
@@ -311,14 +357,12 @@ function handleHighlightClick(event: MouseEvent) {
 	// Text highlight: hit-test stored Ranges.
 	const textId = findTextHighlightAtPoint(clientX, clientY);
 	if (textId) {
-		showHighlightActionMenuForText(textId);
 		return;
 	}
 
 	// Element highlight overlay.
 	const overlay = findOverlayAtPoint(clientX, clientY);
 	if (overlay) {
-		showHighlightActionMenuForOverlay(overlay);
 		return;
 	}
 
@@ -397,7 +441,7 @@ export function planHighlightOverlayRects(target: Element, highlight: AnyHighlig
 	}
 	const rect = target.getBoundingClientRect();
 	const overlay = document.createElement('div');
-	overlay.className = 'obsidian-highlight-overlay';
+	overlay.className = `obsidian-highlight-overlay color-${highlight.color || 'yellow'}`;
 	overlay.dataset.highlightId = highlight.id;
 	overlay.style.position = 'absolute';
 	overlay.style.left = `${rect.left + window.scrollX - 2}px`;
@@ -488,13 +532,19 @@ function handleHighlightHover(event: MouseEvent) {
 		const cursor = onHighlight ? 'pointer' : '';
 		if (cursor !== lastCursor) { document.body.style.cursor = cursor; lastCursor = cursor; }
 
-		if (altKey && (onHighlight || onButton)) {
-			if (textId) showHighlightActionMenuForText(textId);
-			else if (overlay) showHighlightActionMenuForOverlay(overlay);
-			actionMenuShownViaAlt = true;
-		} else if (actionMenuShownViaAlt) {
-			hideHighlightActionMenu();
-			actionMenuShownViaAlt = false;
+		if (onHighlight) {
+			if (actionMenuHideTimeout) {
+				clearTimeout(actionMenuHideTimeout);
+				actionMenuHideTimeout = null;
+			}
+			if (currentActionTargetId !== (textId || overlay?.dataset.highlightId)) {
+				if (textId) showHighlightActionMenuForText(textId);
+				else if (overlay) showHighlightActionMenuForOverlay(overlay);
+			}
+		} else if (!onButton) {
+			if (!actionMenuHideTimeout && highlightActionMenu?.style.display === 'flex') {
+				actionMenuHideTimeout = window.setTimeout(hideHighlightActionMenu, 300);
+			}
 		}
 	});
 }
