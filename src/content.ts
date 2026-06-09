@@ -466,6 +466,29 @@ declare global {
 	// Call updateHasHighlights when the page loads
 	window.addEventListener('load', updateHasHighlights);
 
+	document.addEventListener('keydown', (e) => {
+		// Ignore if typing in an input, textarea, or contenteditable
+		const target = e.target as HTMLElement;
+		if (
+			target.tagName === 'INPUT' ||
+			target.tagName === 'TEXTAREA' ||
+			target.isContentEditable ||
+			target.closest('.obsidian-comment-editor')
+		) {
+			return;
+		}
+
+		if (e.key === 'h' || e.key === 'H') {
+			if (!document.body.classList.contains('obsidian-highlighter-active')) {
+				highlighter.toggleHighlighterMenu(true);
+			}
+		} else if (e.key === 'Escape') {
+			if (document.body.classList.contains('obsidian-highlighter-active')) {
+				highlighter.toggleHighlighterMenu(false);
+			}
+		}
+	});
+
 	// Deactivate highlighter mode on unload
 	function handlePageUnload() {
 		if (isHighlighterMode) {

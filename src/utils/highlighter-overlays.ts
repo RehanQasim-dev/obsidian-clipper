@@ -473,10 +473,20 @@ function handleHighlightHover(event: MouseEvent) {
 		const textId = findTextHighlightAtPoint(clientX, clientY);
 		const overlay = !textId ? findOverlayAtPoint(clientX, clientY) : null;
 		const onHighlight = !!textId || !!overlay;
+		
+		const onButton = !!target?.closest('.obsidian-highlight-action-menu');
+		const onCommentBox = !!target?.closest('.obsidian-comment-box');
+		const onSelectionAction = !!target?.closest('.obsidian-selection-action');
+		
+		const shouldSuppressCursor = onHighlight || onButton || onCommentBox || onSelectionAction;
+		if (shouldSuppressCursor) {
+			document.body.classList.add('obsidian-highlighter-hover-suppress');
+		} else {
+			document.body.classList.remove('obsidian-highlighter-hover-suppress');
+		}
+
 		const cursor = onHighlight ? 'pointer' : '';
 		if (cursor !== lastCursor) { document.body.style.cursor = cursor; lastCursor = cursor; }
-
-		const onButton = !!target?.closest('.obsidian-highlight-action-menu');
 
 		if (altKey && (onHighlight || onButton)) {
 			if (textId) showHighlightActionMenuForText(textId);

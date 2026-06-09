@@ -127,8 +127,15 @@ body.obsidian-highlighter-active {
 
 	// Disable pinch zoom on mobile
 	touch-action: pan-x pan-y;
-	figure, picture, img, a, table, pre {
-		cursor: crosshair !important;
+
+	&:not(.obsidian-highlighter-hover-suppress) {
+		&, * {
+			cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23895DF4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4'/></svg>") 0 24, text !important;
+		}
+		
+		figure, picture, img, a, table, pre {
+			cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23895DF4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m9 11-6 6v3h9l3-3'/><path d='m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4'/></svg>") 0 24, crosshair !important;
+		}
 	}
 	*::selection {
 		background-color: rgba(255, 235, 0, 0.35) !important;
