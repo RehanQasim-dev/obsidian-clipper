@@ -11,6 +11,16 @@ let editingHighlightIds = new Set<string>();
 let expandedCommentIndexes = new Set<string>(); // highlightId-index
 let editingNoteKey: string | null = null; // highlightId-index
 
+// Last innerHTML rendered into each box. renderCommentBoxes() runs on every
+// highlight mutation, storage sync, scroll-driven reapply, etc. Rebuilding
+// innerHTML every time wipes an open editor (losing in-progress text + focus)
+// and — worse — detaches the Save/Cancel buttons. If an async rebuild lands
+// between a button's mousedown and mouseup, the click resolves on the box div
+// instead of the button and the action silently no-ops. Skipping the rebuild
+// when the rendered content is unchanged keeps the editor DOM stable so typing
+// and saving work reliably. Keyed by box element so entries GC with the box.
+const boxRenderCache = new WeakMap<HTMLElement, string>();
+
 function parseNoteString(note: string): { text: string, timestamp?: number } {
 	const match = note.match(/([\s\S]*?)(?:<!--timestamp:(\d+)-->)?$/);
 	return {
@@ -362,6 +372,12 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 		`;
 	}
 
+	// Only touch the DOM when the rendered content actually changed. An open
+	// editor's textarea value (and the add-comment editor's emptiness) is not
+	// part of `html`, so skipping the rebuild preserves whatever the user has
+	// typed and keeps the Save/Cancel buttons attached across re-renders.
+	if (boxRenderCache.get(box) === html) return;
+	boxRenderCache.set(box, html);
 	box.innerHTML = html;
 }
 
@@ -370,6 +386,11 @@ window.addEventListener('obsidian-add-comment', ((e: CustomEvent) => {
 }) as EventListener);
 
 function saveComment(highlightId: string, text: string) {
+	// Guard against double-fire: the editor only exists while the id is in the
+	// editing set. Once we've saved (which clears it), a stray repeat click
+	// must not push the same note again.
+	if (!editingHighlightIds.has(highlightId)) return;
+
 	if (!text) {
 		stopAddingComment(highlightId);
 		return;
