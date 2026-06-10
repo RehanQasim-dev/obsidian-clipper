@@ -635,6 +635,11 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 			});
 			return true;
 		}
+		if (typedRequest.action === "open_dashboard") {
+			browser.tabs.create({ url: browser.runtime.getURL('highlights.html') });
+			sendResponse({success: true});
+			return true;
+		}
 
 		if (typedRequest.action === "openOptionsPage") {
 			try {
@@ -832,6 +837,9 @@ browser.commands.onCommand.addListener(async (command, tab) => {
 	}
 	if (command === "copy_to_clipboard" && tab?.id) {
 		await browser.tabs.sendMessage(tab.id, { action: "copyToClipboard" });
+	}
+	if (command === 'open_dashboard') {
+		browser.tabs.create({ url: browser.runtime.getURL('highlights.html') });
 	}
 	if (command === "toggle_reader" && tab?.id) {
 		await ensureContentScriptLoadedInBackground(tab.id);
