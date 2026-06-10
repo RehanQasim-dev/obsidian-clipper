@@ -10,7 +10,9 @@
 		"contextMenus",
 		"nativeMessaging",
 		"storage",
-		"scripting"
+		"scripting",
+		"identity",
+		"alarms"
 	],
 	"host_permissions": [
 		"<all_urls>",

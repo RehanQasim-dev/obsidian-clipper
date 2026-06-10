@@ -5,6 +5,7 @@
 	"homepage_url": "https://obsidian.md/",
 	"version": "1.6.3",
 	"description": "Save and highlight web pages in a private and durable format that you can access offline. The official extension for Obsidian.",
+	"key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0aFwbVFaTCrOa1lzY1E7XdW5l7LkVspQaoXazBEXEoDM8h8T43NUTWbzitOlwQVbjutt4mLDlHUHTulsnWtNhRdRuDSqDnbDGltZ5UkQcb84uJyAa6tq7RCMBvtcPad1uz48FLUxT3scDmRb44iE9R67sn/1B/yOiU2XLZAC+t/akpkOqkinLuv2uAtj4/WEbcV57oxVAxFgC7gE+jlgpaNfcyGpfs/8ebOzXCxoU6MwVN2A3vPJrI/9EGplMjlyYYvxMyzstjA8hxjdacsxWtjWQeZ1P5VtB1sxjaLJXlrhGdfMacjJPTzG31WlOvdpUYdti5UfoaMhO5VTbCPI2QIDAQAB",
 	"permissions": [
 		"activeTab",
 		"clipboardWrite",
@@ -13,7 +14,9 @@
 		"sidePanel",
 		"storage",
 		"scripting",
-		"declarativeNetRequest"
+		"declarativeNetRequest",
+		"identity",
+		"alarms"
 	],
 	"host_permissions": [
 		"<all_urls>",

@@ -22,6 +22,7 @@
 						<li data-section="highlighter"><div class="nav-item-icon"><i data-lucide="highlighter"></i></div><span data-i18n="highlighter">Highlighter</span></li>
 						<li data-section="interpreter"><div class="nav-item-icon"><i data-lucide="quote"></i></div><span data-i18n="interpreter">Interpreter</span></li>
 						<li data-section="properties"><div class="nav-item-icon"><i data-lucide="archive"></i></div><span data-i18n="properties">Properties</span></li>
+						<li data-section="sync"><div class="nav-item-icon"><i data-lucide="refresh-cw"></i></div><span data-i18n="sync">Sync</span></li>
 						<li class="sidebar-heading" data-i18n="templatesHeading">Templates</li>
 					</ul>
 					<button type="button" id="new-template-btn" class="mod-cta" data-i18n="newTemplate">New&nbsp;template</button>
@@ -612,8 +613,47 @@
 								<div id="property-types-list" class="properties-list"></div>
 								</div>
 							</div>
-							
+
 						</form>
+					</div>
+
+					<div id="sync-section" class="settings-section">
+						<div class="settings-section-header">
+							<h2 data-i18n="syncSettings">Sync</h2>
+						</div>
+						<div class="setting-group">
+							<div class="setting-items">
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label data-i18n="syncGoogleDrive">Google Drive sync</label>
+										<div class="setting-item-description" data-i18n="syncGoogleDriveDescription">
+											Back up and sync your highlights, comments, and drawings to your own Google Drive so they follow you across browsers and machines.
+										</div>
+									</div>
+									<div class="setting-item-control">
+										<button type="button" id="sync-connect-btn" class="mod-cta" data-i18n="syncConnect">Connect Google Drive</button>
+										<button type="button" id="sync-disconnect-btn" style="display: none;" data-i18n="syncDisconnect">Disconnect</button>
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label data-i18n="syncStatusLabel">Status</label>
+										<div id="sync-status" class="setting-item-description" data-i18n="syncNotConnected">Not connected.</div>
+									</div>
+									<div class="setting-item-control">
+										<button type="button" id="sync-now-btn" style="display: none;" data-i18n="syncNow">Sync now</button>
+									</div>
+								</div>
+								<div class="setting-item" id="sync-setup-note" style="display: none;">
+									<div class="setting-item-info">
+										<div class="setting-item-description" data-i18n="syncSetupNote">
+											Google Drive sync isn't configured in this build. A developer must add a Google OAuth client id. The OAuth redirect URI for this browser is shown below — register it in your Google Cloud OAuth client.
+										</div>
+										<div class="setting-item-description"><code id="sync-redirect-uri"></code></div>
+									</div>
+								</div>
+							</div>
+						</div>
 					</div>
 
 					<div id="templates-section" class="settings-section">

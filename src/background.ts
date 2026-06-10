@@ -5,6 +5,8 @@ import { TextHighlightData } from './utils/highlighter';
 import { debounce } from './utils/debounce';
 import { Settings } from './types/types';
 import { debugLog } from './utils/debug';
+import { sync as syncToDrive, getStatus as getSyncStatus, resetSyncState } from './utils/sync-engine';
+import { connect as connectDrive, disconnect as disconnectDrive, getRedirectUrl, isConfigured as isSyncConfigured } from './utils/google-drive';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
 const YOUTUBE_INNERTUBE_RULE_ID = 9002;
@@ -330,6 +332,77 @@ browser.runtime.onMessage.addListener((request: unknown) => {
 			return { ok: false, status: 0, text: '', error: 'CORS_PERMISSION_NEEDED' };
 		});
 });
+
+// --- Google Drive annotation sync -------------------------------------------
+// Push local annotation changes (debounced) and pull remote changes on a timer.
+// The sync engine is idempotent and only writes storage when something actually
+// changed, so applying a pulled change doesn't loop back into another push.
+
+const SYNC_ALARM = 'driveSync';
+
+const debouncedSyncPush = debounce(() => {
+	syncToDrive(false).catch(err => console.warn('Drive sync push failed:', err));
+}, 4000);
+
+// Annotation edits land in storage.local under these keys. Ignore our own
+// bookkeeping keys (snapshot/status/token) to avoid a feedback loop.
+browser.storage.onChanged.addListener((changes, area) => {
+	if (area !== 'local') return;
+	if (!isSyncConfigured()) return;
+	if (changes.highlights || changes.drawings) {
+		debouncedSyncPush();
+	}
+});
+
+if (browser.alarms) {
+	browser.alarms.create(SYNC_ALARM, { periodInMinutes: 5 });
+	browser.alarms.onAlarm.addListener((alarm) => {
+		if (alarm.name === SYNC_ALARM && isSyncConfigured()) {
+			syncToDrive(false).catch(err => console.warn('Drive sync poll failed:', err));
+		}
+	});
+}
+
+browser.runtime.onStartup.addListener(() => {
+	if (isSyncConfigured()) syncToDrive(false).catch(() => {});
+});
+
+browser.runtime.onMessage.addListener((request: unknown, _sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void): true | undefined => {
+	if (typeof request !== 'object' || request === null) return;
+	const action = (request as any).action as string;
+	if (action !== 'syncConnect' && action !== 'syncDisconnect' && action !== 'syncNow' && action !== 'syncStatus') {
+		return;
+	}
+	(async () => {
+		try {
+			switch (action) {
+				case 'syncConnect':
+					await connectDrive();
+					await syncToDrive(true);
+					break;
+				case 'syncDisconnect':
+					await disconnectDrive();
+					await resetSyncState();
+					break;
+				case 'syncNow':
+					await syncToDrive(true);
+					break;
+				case 'syncStatus':
+					// no side effect
+					break;
+			}
+			const status = await getSyncStatus();
+			sendResponse({ success: true, status, configured: isSyncConfigured(), redirectUrl: getRedirectUrl() });
+		} catch (err) {
+			const status = await getSyncStatus();
+			sendResponse({ success: false, error: err instanceof Error ? err.message : String(err), status, configured: isSyncConfigured(), redirectUrl: getRedirectUrl() });
+		}
+	})();
+	return true;
+});
+
+// Log the OAuth redirect URI once so it can be registered in Google Cloud.
+console.info('[Obsidian Clipper sync] OAuth redirect URI to register:', getRedirectUrl());
 
 browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void): true | undefined => {
 	if (typeof request === 'object' && request !== null) {

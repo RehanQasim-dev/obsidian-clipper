@@ -627,6 +627,51 @@
 	"propertiesSettings": {
 		"message": "Properties"
 	},
+	"sync": {
+		"message": "Sync"
+	},
+	"syncSettings": {
+		"message": "Sync"
+	},
+	"syncGoogleDrive": {
+		"message": "Google Drive sync"
+	},
+	"syncGoogleDriveDescription": {
+		"message": "Back up and sync your highlights, comments, and drawings to your own Google Drive so they follow you across browsers and machines."
+	},
+	"syncConnect": {
+		"message": "Connect Google Drive"
+	},
+	"syncDisconnect": {
+		"message": "Disconnect"
+	},
+	"syncNow": {
+		"message": "Sync now"
+	},
+	"syncStatusLabel": {
+		"message": "Status"
+	},
+	"syncNotConnected": {
+		"message": "Not connected."
+	},
+	"syncConnected": {
+		"message": "Connected."
+	},
+	"syncInProgress": {
+		"message": "Syncing…"
+	},
+	"syncLastSynced": {
+		"message": "Last synced"
+	},
+	"syncError": {
+		"message": "Sync error"
+	},
+	"syncNotConfigured": {
+		"message": "Sync is not configured in this build."
+	},
+	"syncSetupNote": {
+		"message": "Google Drive sync isn't configured in this build. A developer must add a Google OAuth client id. The OAuth redirect URI for this browser is shown below — register it in your Google Cloud OAuth client."
+	},
 	"propertyName": {
 		"message": "Property name"
 	},

@@ -22,11 +22,20 @@ let singleClickTimer: number | null = null; // disambiguates single- vs double-c
 // and saving work reliably. Keyed by box element so entries GC with the box.
 const boxRenderCache = new WeakMap<HTMLElement, string>();
 
-function parseNoteString(note: string): { text: string, timestamp?: number } {
-	const match = note.match(/([\s\S]*?)(?:<!--timestamp:(\d+)-->)?$/);
+function parseNoteString(note: string): { text: string, timestamp?: number, edited?: number } {
+	const tsMatch = note.match(/<!--timestamp:(\d+)-->/);
+	const edMatch = note.match(/<!--edited:(\d+)-->/);
+	const text = note
+		.replace(/<!--timestamp:\d+-->/, '')
+		.replace(/<!--edited:\d+-->/, '')
+		.trim();
 	return {
-		text: match ? match[1].trim() : note.trim(),
-		timestamp: match && match[2] ? parseInt(match[2]) : undefined
+		text,
+		// Creation time, also the stable per-comment id used by the sync merge.
+		timestamp: tsMatch ? parseInt(tsMatch[1]) : undefined,
+		// Last-edit time, written by saveEditedComment; used to resolve when the
+		// same comment was edited on two devices.
+		edited: edMatch ? parseInt(edMatch[1]) : undefined
 	};
 }
 
@@ -557,7 +566,9 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 	if (highlight && highlight.notes) {
 		const oldParsed = parseNoteString(highlight.notes[index]);
 		const ts = oldParsed.timestamp || Date.now();
-		highlight.notes[index] = `${text}<!--timestamp:${ts}-->`;
+		// Keep the original creation timestamp (the comment's stable id) but record
+		// a fresh edit time so cross-device merges keep the most recent edit.
+		highlight.notes[index] = `${text}<!--timestamp:${ts}--><!--edited:${Date.now()}-->`;
 		// Collapse the comment after editing — the dblclick that opened the editor
 		// added this key to the expanded set; drop it so a long edited comment
 		// shows clamped, matching a freshly saved one.

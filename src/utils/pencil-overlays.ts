@@ -32,6 +32,10 @@ interface PencilStroke {
 	width: number;
 	// Flattened document-coordinate points: [x0, y0, x1, y1, ...].
 	points: number[];
+	// Wall-clock ms of the last change to this stroke; stamped in saveDrawings()
+	// by diffing against the persisted copy. Used by the Google Drive sync engine
+	// for last-write-wins conflict resolution. Optional for pre-sync data.
+	updatedAt?: number;
 }
 
 interface StoredDrawings {
@@ -300,11 +304,25 @@ export async function loadDrawings(): Promise<void> {
 	syncListeners();
 }
 
+// Compare two strokes ignoring the sync-only `updatedAt` stamp.
+function strokeContentEqual(a: PencilStroke, b: PencilStroke): boolean {
+	const strip = ({ updatedAt, ...rest }: PencilStroke) => rest;
+	return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
 function saveDrawings(): void {
 	const url = normalizeUrl(getPageUrl());
 	browser.storage.local.get('drawings').then((result: { drawings?: DrawingsStorage }) => {
 		const all = result.drawings || {};
 		if (strokes.length > 0) {
+			// Stamp updatedAt on new/changed strokes so the sync engine can resolve
+			// cross-device conflicts by most-recent edit.
+			const prevById = new Map((all[url]?.strokes || []).map(s => [s.id, s]));
+			const now = Date.now();
+			strokes = strokes.map(s => {
+				const prev = prevById.get(s.id);
+				return (!prev || !strokeContentEqual(prev, s)) ? { ...s, updatedAt: now } : s;
+			});
 			all[url] = { url, strokes };
 		} else {
 			delete all[url];
