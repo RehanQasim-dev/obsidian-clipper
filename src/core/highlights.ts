@@ -43,7 +43,8 @@ type SortOrder = 'az' | 'za' | 'new' | 'old';
 
 let allDomainGroups: DomainGroup[] = [];
 let domainSettingsMap: Record<string, DomainSettings> = {};
-let searchQuery = '';
+let searchQueryWebsites = '';
+let searchQueryHighlights = '';
 let currentNav: NavSelection = { type: 'all' };
 let expandedSidebarDomains = new Set<string>();
 let sortOrder: SortOrder = 'az';
@@ -74,12 +75,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 	renderSidebar();
 	renderMain();
 
-	const searchInput = document.getElementById('highlights-search') as HTMLInputElement;
-	searchInput.addEventListener('input', () => {
-		searchQuery = searchInput.value.toLowerCase().trim();
-		renderSidebar();
-		renderMain();
-	});
+	const searchWebsites = document.getElementById('highlights-search-websites') as HTMLInputElement;
+	if (searchWebsites) {
+		searchWebsites.addEventListener('input', () => {
+			searchQueryWebsites = searchWebsites.value.toLowerCase().trim();
+			renderSidebar();
+			renderMain();
+		});
+	}
+
+	const searchHighlights = document.getElementById('highlights-search-highlights') as HTMLInputElement;
+	if (searchHighlights) {
+		searchHighlights.addEventListener('input', () => {
+			searchQueryHighlights = searchHighlights.value.toLowerCase().trim();
+			renderSidebar();
+			renderMain();
+		});
+	}
 
 	const deleteBtn = document.getElementById('delete-context-btn') as HTMLButtonElement;
 	deleteBtn.addEventListener('click', deleteCurrentContext);
@@ -290,34 +302,35 @@ async function loadData() {
 // --- Search ---
 
 function matchesSearch(entry: HighlightEntry): boolean {
-	if (!searchQuery) return true;
+	if (!searchQueryHighlights) return true;
 	const content = entry.data.content?.toLowerCase() || '';
 	const notes = entry.data.notes?.join(' ').toLowerCase() || '';
 	const url = entry.url.toLowerCase();
-	return content.includes(searchQuery) || notes.includes(searchQuery) || url.includes(searchQuery);
+	return content.includes(searchQueryHighlights) || notes.includes(searchQueryHighlights) || url.includes(searchQueryHighlights);
 }
 
 function getFilteredGroups(): DomainGroup[] {
-	if (!searchQuery) return sortGroups([...allDomainGroups]);
+	if (!searchQueryWebsites && !searchQueryHighlights) return sortGroups([...allDomainGroups]);
 
 	const filtered: DomainGroup[] = [];
 	for (const group of allDomainGroups) {
-		// Check if domain/site name matches — if so, include all pages
 		const normalized = group.domain.replace(/^www\./, '');
 		const siteName = domainSettingsMap[normalized]?.site?.toLowerCase() || '';
-		const domainMatches = group.domain.toLowerCase().includes(searchQuery) || siteName.includes(searchQuery);
+		
+		const domainMatches = !searchQueryWebsites || group.domain.toLowerCase().includes(searchQueryWebsites) || siteName.includes(searchQueryWebsites);
+
+		if (!domainMatches) continue;
 
 		const filteredPages: PageGroup[] = [];
 		for (const page of group.pages) {
-			// Check if page title matches — if so, include all its highlights
-			const titleMatches = page.title?.toLowerCase().includes(searchQuery) || false;
+			const titleMatches = !searchQueryHighlights || (page.title?.toLowerCase().includes(searchQueryHighlights) || false);
 
-			if (domainMatches || titleMatches) {
+			if (titleMatches) {
 				filteredPages.push(page);
 			} else {
 				const filteredHighlights = page.highlights.filter(matchesSearch);
-				if (filteredHighlights.length > 0) {
-					filteredPages.push({ ...page, highlights: filteredHighlights });
+				if (filteredHighlights.length > 0 || !searchQueryHighlights) {
+					filteredPages.push({ ...page, highlights: filteredHighlights.length > 0 ? filteredHighlights : page.highlights });
 				}
 			}
 		}
@@ -450,6 +463,11 @@ function createPageSubItems(group: DomainGroup): HTMLElement[] {
 		pageLi.appendChild(pageCount);
 
 		pageLi.addEventListener('click', (e) => {
+			if (e.ctrlKey || e.metaKey) {
+				e.preventDefault();
+				window.open(page.url, '_blank');
+				return;
+			}
 			e.stopPropagation();
 			navigate({ type: 'page', domain: group.domain, url: page.url });
 		});
@@ -597,7 +615,12 @@ function createDomainNode(domain: string): CachedDomainNode {
 		toggleDomainExpand(domain);
 	});
 
-	li.addEventListener('click', () => {
+	li.addEventListener('click', (e) => {
+		if (e.ctrlKey || e.metaKey) {
+			e.preventDefault();
+			window.open(`https://${domain}`, '_blank');
+			return;
+		}
 		const isActive = currentNav.type === 'domain' && currentNav.domain === domain;
 		if (isActive) {
 			toggleDomainExpand(domain);
@@ -1039,7 +1062,7 @@ function createPageHeader(url: string, domain: string, title?: string): HTMLElem
 	titleLink.textContent = titleText;
 	titleLink.addEventListener('click', (e) => {
 		e.preventDefault();
-		navigate({ type: 'page', domain, url });
+		window.open(url, '_blank');
 	});
 	titleRow.appendChild(titleLink);
 
@@ -1220,15 +1243,48 @@ function createHighlightItem(entries: HighlightEntry[], pageUrl: string): HTMLEl
 	// A grouped selection may include stored <li> fragments; wrap consecutive
 	// orphan <li>s in a <ul> so the list renders with its bullets intact.
 	wrapOrphanListItems(content);
-	if (searchQuery) highlightTextNodes(content, searchQuery);
+	if (searchQueryHighlights) highlightTextNodes(content, searchQueryHighlights);
 	item.appendChild(content);
 
 	const mergedNotes = entries.flatMap(e => e.data.notes ?? []);
-	for (const note of mergedNotes) {
-		const noteEl = document.createElement('div');
-		noteEl.className = 'highlight-item-note';
-		noteEl.textContent = note;
-		item.appendChild(noteEl);
+	if (mergedNotes.length > 0) {
+		const threadEl = document.createElement('div');
+		threadEl.className = 'highlight-comment-thread';
+		
+		for (const note of mergedNotes) {
+			const noteContainer = document.createElement('div');
+			noteContainer.className = 'highlight-item-note-container';
+			
+			const timestampMatch = note.match(/<!--timestamp:(\d+)-->/);
+			const editedMatch = note.match(/<!--edited:(\d+)-->/);
+			let cleanNote = note
+				.replace(/<!--timestamp:\d+-->/, '')
+				.replace(/<!--edited:\d+-->/, '')
+				.trim();
+			
+			if (timestampMatch) {
+				const timestamp = parseInt(timestampMatch[1], 10);
+				let timeStr = dayjs(timestamp).fromNow();
+				if (editedMatch) {
+					timeStr += ' (edited)';
+				}
+				
+				const timeEl = document.createElement('div');
+				timeEl.className = 'highlight-item-time';
+				timeEl.textContent = timeStr;
+				timeEl.style.marginBottom = '4px';
+				noteContainer.appendChild(timeEl);
+			}
+
+			const noteEl = document.createElement('div');
+			noteEl.className = 'highlight-item-note';
+			noteEl.textContent = cleanNote;
+			if (searchQueryHighlights) highlightTextNodes(noteEl, searchQueryHighlights);
+			
+			noteContainer.appendChild(noteEl);
+			threadEl.appendChild(noteContainer);
+		}
+		item.appendChild(threadEl);
 	}
 
 	const footer = document.createElement('div');

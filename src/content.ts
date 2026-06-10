@@ -490,6 +490,12 @@ declare global {
 			return;
 		}
 
+		if (e.altKey && (e.key === 'e' || e.key === 'E')) {
+			e.preventDefault();
+			browser.runtime.sendMessage({ action: "open_dashboard" });
+			return;
+		}
+
 		if (e.key === 'h' || e.key === 'H') {
 			// Highlighter and pencil are mutually exclusive (their pointer handlers
 			// would otherwise fight), so leaving pencil mode first.

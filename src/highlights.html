@@ -21,7 +21,7 @@
 					</a>
 				</div>
 				<div class="highlights-search-container">
-					<input type="text" id="highlights-search" data-i18n="searchHighlightsPlaceholder" placeholder="Search highlights…" autocomplete="off" spellcheck="false" />
+					<input type="text" id="highlights-search-websites" placeholder="Search websites…" autocomplete="off" spellcheck="false" />
 					<div class="menu-btn">
 						<button type="button" id="highlights-sort-btn" class="menu-toggle clickable-icon" data-i18n-title="sort">
 							<i data-lucide="ellipsis"></i>
@@ -61,6 +61,9 @@
 				</div>
 				<div id="highlights-main-header">
 					<div id="highlights-breadcrumb"></div>
+					<div class="highlights-search-main-container" style="flex: 1; margin: 0 20px;">
+						<input type="text" id="highlights-search-highlights" placeholder="Search highlights…" autocomplete="off" spellcheck="false" style="width: 100%; max-width: 400px; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--background-modifier-border);" />
+					</div>
 					<div class="highlights-main-actions">
 						<button type="button" id="export-context-btn" data-i18n="export">Export</button>
 						<button type="button" id="delete-context-btn" class="mod-warning" data-i18n="delete">Delete</button>

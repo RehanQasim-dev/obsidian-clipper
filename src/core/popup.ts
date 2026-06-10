@@ -367,6 +367,18 @@ document.addEventListener('DOMContentLoaded', async function() {
 			});
 			initializeIcons(settingsButton);
 		}
+		const dashboardButton = document.getElementById('open-dashboard');
+		if (dashboardButton) {
+			dashboardButton.addEventListener('click', async function() {
+				try {
+					await browser.runtime.sendMessage({ action: "open_dashboard" });
+					setTimeout(() => window.close(), 50);
+				} catch (error) {
+					console.error('Error opening dashboard page:', error);
+				}
+			});
+			initializeIcons(dashboardButton);
+		}
 
 		// Initialize the rest of the popup
 		if (currentTabId) {
