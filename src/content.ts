@@ -1,5 +1,6 @@
 import browser from './utils/browser-polyfill';
 import * as highlighter from './utils/highlighter';
+import * as pencil from './utils/pencil-overlays';
 import { removeExistingHighlights } from './utils/highlighter-overlays';
 import { loadSettings, generalSettings } from './utils/storage-utils';
 import { getDomain } from './utils/string-utils';
@@ -426,6 +427,11 @@ declare global {
 		await highlighter.loadHighlights();
 		highlighter.setPageTitle(document.title);
 
+		// Restore any freehand pencil strokes saved for this page. Strokes render
+		// via inline SVG attributes, so they appear on load without needing the
+		// highlighter stylesheet.
+		pencil.loadDrawings();
+
 		// Inject the highlighter stylesheet so saved highlights and their comment
 		// boxes are actually styled on load. loadHighlights() registers the text
 		// highlight ranges and builds the comment-box DOM, but the ::highlight()
@@ -485,6 +491,9 @@ declare global {
 		}
 
 		if (e.key === 'h' || e.key === 'H') {
+			// Highlighter and pencil are mutually exclusive (their pointer handlers
+			// would otherwise fight), so leaving pencil mode first.
+			if (pencil.isPencilActive()) pencil.togglePencilMode(false);
 			if (!document.body.classList.contains('obsidian-highlighter-active')) {
 				// Make sure the stylesheet is present before activating — without it
 				// the highlighter cursor, floating menu, and highlight colors have no
@@ -492,10 +501,22 @@ declare global {
 				ensureHighlighterCSS();
 				highlighter.toggleHighlighterMenu(true);
 			}
+		} else if (e.key === 'p' || e.key === 'P') {
+			// Toggle the freehand pencil tool. Leaving highlighter mode first so the
+			// two tools don't both react to the same drags.
+			if (pencil.isPencilActive()) {
+				pencil.togglePencilMode(false);
+			} else {
+				if (document.body.classList.contains('obsidian-highlighter-active')) {
+					highlighter.toggleHighlighterMenu(false);
+				}
+				pencil.togglePencilMode(true);
+			}
 		} else if (e.key === 'Escape') {
 			if (document.body.classList.contains('obsidian-highlighter-active')) {
 				highlighter.toggleHighlighterMenu(false);
 			}
+			// Pencil mode handles its own Escape (exits + clears selection).
 		}
 	});
 
