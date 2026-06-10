@@ -232,6 +232,22 @@ let highlightActionMenu: HTMLDivElement | null = null;
 let currentActionTargetId: string | null = null;
 let actionMenuShownViaAlt = false;
 
+// Dwell-gating for switching the action menu between highlights. Moving the
+// cursor from a highlight up to its floating menu can briefly cross a
+// neighboring highlight; without this gate that transient crossing instantly
+// re-targets the menu, so a color click lands on the wrong highlight (or the
+// menu jumps away and the click misses entirely). Require the pointer to rest
+// on a different highlight for a moment before the menu follows.
+let pendingSwitchTargetId: string | null = null;
+let pendingSwitchTimer: number | null = null;
+function clearPendingSwitch(): void {
+	pendingSwitchTargetId = null;
+	if (pendingSwitchTimer) {
+		clearTimeout(pendingSwitchTimer);
+		pendingSwitchTimer = null;
+	}
+}
+
 function ensureHighlightActionMenu(): HTMLDivElement {
 	if (highlightActionMenu) return highlightActionMenu;
 	
@@ -349,6 +365,7 @@ export function hideHighlightActionMenu(): void {
 	if (highlightActionMenu) highlightActionMenu.style.display = 'none';
 	currentActionTargetId = null;
 	actionMenuShownViaAlt = false;
+	clearPendingSwitch();
 	if (actionMenuHideTimeout) {
 		clearTimeout(actionMenuHideTimeout);
 		actionMenuHideTimeout = null;
@@ -640,12 +657,38 @@ function handleHighlightHover(event: MouseEvent) {
 				clearTimeout(actionMenuHideTimeout);
 				actionMenuHideTimeout = null;
 			}
-			if (currentActionTargetId !== (textId || overlay?.dataset.highlightId)) {
+			const hoveredId = textId || overlay?.dataset.highlightId || null;
+			const menuShown = highlightActionMenu?.style.display === 'flex';
+			if (hoveredId === currentActionTargetId) {
+				// Already targeting this highlight — drop any pending switch.
+				clearPendingSwitch();
+			} else if (!menuShown) {
+				// No menu visible yet: show it immediately for this highlight.
+				clearPendingSwitch();
 				if (textId) showHighlightActionMenuForText(textId);
 				else if (overlay) showHighlightActionMenuForOverlay(overlay);
+			} else if (hoveredId && hoveredId !== pendingSwitchTargetId) {
+				// Menu is open for a different highlight: only follow after a brief
+				// dwell, so crossings while travelling to the menu don't hijack the
+				// target (the cause of color clicks landing on the wrong highlight).
+				pendingSwitchTargetId = hoveredId;
+				if (pendingSwitchTimer) clearTimeout(pendingSwitchTimer);
+				pendingSwitchTimer = window.setTimeout(() => {
+					pendingSwitchTimer = null;
+					pendingSwitchTargetId = null;
+					if (textHighlightRanges.has(hoveredId)) {
+						showHighlightActionMenuForText(hoveredId);
+					} else {
+						const ov = document.querySelector<HTMLElement>(
+							`.obsidian-highlight-overlay[data-highlight-id="${hoveredId}"]`
+						);
+						if (ov) showHighlightActionMenuForOverlay(ov);
+					}
+				}, 180);
 			}
-		} else if (!onButton) {
-			if (!actionMenuHideTimeout && highlightActionMenu?.style.display === 'flex') {
+		} else {
+			clearPendingSwitch();
+			if (!onButton && !actionMenuHideTimeout && highlightActionMenu?.style.display === 'flex') {
 				actionMenuHideTimeout = window.setTimeout(hideHighlightActionMenu, 300);
 			}
 		}

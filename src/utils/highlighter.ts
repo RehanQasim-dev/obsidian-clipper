@@ -1081,7 +1081,14 @@ export function updateHighlightColor(id: string, color: 'yellow' | 'red' | 'gree
 	
 	currentHighlightColor = color;
 	document.body.dataset.obsidianColor = color;
-	
+
+	// Recoloring is a real mutation, but it only changes an existing highlight's
+	// `color` field — the version counter wouldn't otherwise move, so
+	// applyHighlights()'s dirty-check would skip the repaint and the new color
+	// would only appear when some unrelated event (scroll/resize) happened to
+	// invalidate the cache first. Bump so the repaint always runs.
+	bumpHighlightsVersion();
+
 	commitHighlightChanges();
 }
 

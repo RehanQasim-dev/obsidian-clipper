@@ -533,6 +533,11 @@ function saveComment(highlightId: string, text: string) {
 	if (highlight) {
 		if (!highlight.notes) highlight.notes = [];
 		highlight.notes.push(formattedText);
+		// A freshly saved comment should display collapsed (clamped to 3 lines).
+		// Clear any stale expand state for this index — e.g. left behind when a
+		// prior comment at the same index was edited (dblclick adds the key) or
+		// deleted without cleanup.
+		expandedCommentIndexes.delete(`${highlightId}-${highlight.notes.length - 1}`);
 		// Update global highlights array
 		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
 		updateHighlights(newHighlights);
@@ -553,7 +558,11 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 		const oldParsed = parseNoteString(highlight.notes[index]);
 		const ts = oldParsed.timestamp || Date.now();
 		highlight.notes[index] = `${text}<!--timestamp:${ts}-->`;
-		
+		// Collapse the comment after editing — the dblclick that opened the editor
+		// added this key to the expanded set; drop it so a long edited comment
+		// shows clamped, matching a freshly saved one.
+		expandedCommentIndexes.delete(`${highlightId}-${index}`);
+
 		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
 		updateHighlights(newHighlights);
 		saveHighlights();

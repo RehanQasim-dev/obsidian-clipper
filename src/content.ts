@@ -423,16 +423,22 @@ declare global {
 	async function initializeHighlighter() {
 		await loadSettings();
 
-		if (generalSettings.alwaysShowHighlights) {
-			const result = await browser.storage.local.get('highlights');
-			const allHighlights = (result.highlights || {}) as Record<string, unknown>;
-			if (allHighlights[window.location.href]) {
-				await ensureHighlighterCSS();
-			}
-		}
-
 		await highlighter.loadHighlights();
 		highlighter.setPageTitle(document.title);
+
+		// Inject the highlighter stylesheet so saved highlights and their comment
+		// boxes are actually styled on load. loadHighlights() registers the text
+		// highlight ranges and builds the comment-box DOM, but the ::highlight()
+		// color rules and .obsidian-comment-box styles live in highlighter.css —
+		// without it everything renders invisibly until the popup forces an inject.
+		// Gate on the highlights we actually loaded rather than a raw-URL storage
+		// lookup (the old check keyed by window.location.href, which never matches
+		// the normalized URL highlights are saved under when the URL has a hash or
+		// tracking params — so highlights silently failed to render on reload).
+		if (generalSettings.alwaysShowHighlights && highlighter.getHighlights().length > 0) {
+			await ensureHighlighterCSS();
+		}
+
 		updateHasHighlights();
 	}
 
@@ -480,6 +486,10 @@ declare global {
 
 		if (e.key === 'h' || e.key === 'H') {
 			if (!document.body.classList.contains('obsidian-highlighter-active')) {
+				// Make sure the stylesheet is present before activating — without it
+				// the highlighter cursor, floating menu, and highlight colors have no
+				// styles, so the mode appears not to turn on at all.
+				ensureHighlighterCSS();
 				highlighter.toggleHighlighterMenu(true);
 			}
 		} else if (e.key === 'Escape') {
