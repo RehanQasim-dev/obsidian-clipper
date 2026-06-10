@@ -214,6 +214,11 @@ export interface HighlightData {
 	// When one selection crosses multiple blocks, all resulting highlights
 	// share a groupId so they delete, clip, and visually associate together.
 	groupId?: string;
+	// Wall-clock ms of the last change to this highlight's own fields (color,
+	// notes, geometry). Stamped centrally in saveHighlights() by diffing against
+	// the persisted copy. Used by the Google Drive sync engine for last-write-wins
+	// conflict resolution; optional so pre-sync stored data stays valid.
+	updatedAt?: number;
 }
 
 export interface TextHighlightData extends HighlightData {
@@ -1024,15 +1029,30 @@ function mergeHighlights(h1: AnyHighlightData, h2: AnyHighlightData): AnyHighlig
 	return h1;
 }
 
+// Compare two highlights ignoring the sync-only `updatedAt` stamp, so re-saving
+// an unchanged highlight doesn't keep bumping its timestamp.
+function highlightContentEqual(a: AnyHighlightData, b: AnyHighlightData): boolean {
+	const strip = ({ updatedAt, ...rest }: AnyHighlightData) => rest;
+	return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
+}
+
 export function saveHighlights() {
 	const rawUrl = getPageUrl();
 	const url = normalizeUrl(rawUrl);
 	if (highlights.length > 0) {
 		const title = pageTitle || document.title || undefined;
-		const data: StoredData = { highlights, url, title };
 		browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
 			const allHighlights: HighlightsStorage = result.highlights || {};
-			allHighlights[url] = data;
+			// Stamp updatedAt on highlights whose own fields changed vs. what's
+			// persisted, so the sync engine can resolve cross-device conflicts by
+			// most-recent edit.
+			const prevById = new Map((allHighlights[url]?.highlights || []).map(h => [h.id, h]));
+			const now = Date.now();
+			const stamped = highlights.map(h => {
+				const prev = prevById.get(h.id);
+				return (!prev || !highlightContentEqual(prev, h)) ? { ...h, updatedAt: now } : h;
+			});
+			allHighlights[url] = { highlights: stamped, url, title };
 			browser.storage.local.set({ highlights: allHighlights });
 		});
 		const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute('content');

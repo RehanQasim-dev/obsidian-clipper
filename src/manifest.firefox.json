@@ -12,7 +12,9 @@
 		"storage",
 		"scripting",
 		"webRequest",
-		"webRequestBlocking"
+		"webRequestBlocking",
+		"identity",
+		"alarms"
 	],
 	"host_permissions": [
 		"<all_urls>",
