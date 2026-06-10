@@ -321,6 +321,16 @@ body.obsidian-highlighter-active {
 // Element highlight overlay (figure, img, table, pre, picture). Always
 // visible — the hover-delete button is the primary affordance and needs
 // something to hit-test regardless of highlighter mode.
+// While an image viewer / lightbox is open over a highlighted image, hide the
+// absolutely-positioned overlays and comment boxes — they can't follow the
+// image into the viewer and would otherwise float over it at the wrong spot.
+body.obsidian-highlight-overlays-hidden {
+	.obsidian-highlight-overlay,
+	.obsidian-comment-box {
+		display: none !important;
+	}
+}
+
 .obsidian-highlight-overlay {
 	display: block;
 	position: absolute;
@@ -328,7 +338,11 @@ body.obsidian-highlighter-active {
 	border-radius: 4px;
 	mix-blend-mode: multiply;
 	pointer-events: none;
-	z-index: 999999998;
+	// Sit just above page content (z:auto/0) but below sticky/fixed page chrome
+	// (headers, banners — typically z-index ≥ 10) so the highlight border scrolls
+	// *under* a sticky banner exactly like the image it marks, instead of floating
+	// on top of it. A huge z-index made the border the topmost thing on the page.
+	z-index: 1;
 
 	&.obsidian-highlight-overlay-dark {
 		mix-blend-mode: screen;

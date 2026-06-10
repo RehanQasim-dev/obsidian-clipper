@@ -409,8 +409,122 @@ export function markHighlightJustCreated(): void {
 	lastHighlightCreatedAt = Date.now();
 }
 
+// --- Hide overlays while an image viewer / lightbox is open ---
+//
+// Element-highlight borders are absolutely-positioned divs over the image. When
+// the image is clicked (outside highlighter mode) and opens in a lightbox or
+// fullscreen viewer, that border can't follow — it would float at the image's
+// old document position, on top of the viewer. So once we detect the image got
+// covered, hide the overlays (and comment boxes) until the viewer closes.
+const HIDDEN_FOR_VIEWER_CLASS = 'obsidian-highlight-overlays-hidden';
+let imageViewTimer: number | null = null;
+function clearImageViewTimer(): void {
+	if (imageViewTimer) {
+		clearInterval(imageViewTimer);
+		imageViewTimer = null;
+	}
+}
+
+// True when a modal/lightbox is painted on top of the element's center point.
+// Returns false when the element is offscreen or not laid out (we can't conclude
+// either way, so don't act).
+//
+// The hit-test walks up from whatever is topmost at the center: if it crosses a
+// position:fixed layer before reaching the highlighted element, a modal covers
+// it. This deliberately catches viewers that are DOM *descendants* of the
+// highlighted element — e.g. an image lightbox appended inside the same
+// <figure> as a `fixed inset-0` backdrop — which a plain contains() check would
+// miss. An in-flow descendant shown in place (a caption inside the figure) has
+// no fixed ancestor, so it correctly reads as "not covered".
+function isElementCovered(el: Element): boolean {
+	const r = el.getBoundingClientRect();
+	if (r.width === 0 || r.height === 0) return false;
+	const cx = r.left + r.width / 2;
+	const cy = r.top + r.height / 2;
+	if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return false;
+	const top = document.elementFromPoint(cx, cy);
+	if (!top) return false;
+	let node: Element | null = top;
+	while (node && node !== el) {
+		if (window.getComputedStyle(node).position === 'fixed') return true;
+		node = node.parentElement;
+	}
+	// Reached the element itself, or an in-flow descendant of it → not covered.
+	if (el === top || el.contains(top)) return false;
+	// Topmost element is outside the highlight (a separate overlay) → covered,
+	// unless it's an ancestor we're sitting inside.
+	return !top.contains(el);
+}
+
+// A highlighted image is "being viewed" when it has either been covered by a
+// backdrop (classic lightbox) OR moved/resized away from where its border was
+// painted (zoom-to-center libraries like medium-zoom transform the original
+// image, so it isn't covered — it travels to the middle of the screen). Compare
+// the live rect against the resting rect captured at click time, in document
+// coordinates so page scrolling doesn't read as movement.
+function isImageBeingViewed(el: Element, rest: { cx: number; cy: number; w: number; h: number }): boolean {
+	if (!el.isConnected) return false;
+	const r = el.getBoundingClientRect();
+	if (r.width === 0 || r.height === 0) return isElementCovered(el);
+	const cx = r.left + r.width / 2 + window.scrollX;
+	const cy = r.top + r.height / 2 + window.scrollY;
+	const moved = Math.abs(cx - rest.cx) > 24 || Math.abs(cy - rest.cy) > 24
+		|| Math.abs(r.width - rest.w) > Math.max(24, rest.w * 0.25)
+		|| Math.abs(r.height - rest.h) > Math.max(24, rest.h * 0.25);
+	return moved || isElementCovered(el);
+}
+
+function watchImageForViewer(imageEl: Element): void {
+	clearImageViewTimer();
+	// Resting geometry in document coords, sampled before any viewer animation
+	// (this runs in the capture phase, ahead of the page's own click handler).
+	const r0 = imageEl.getBoundingClientRect();
+	const rest = {
+		cx: r0.left + r0.width / 2 + window.scrollX,
+		cy: r0.top + r0.height / 2 + window.scrollY,
+		w: r0.width,
+		h: r0.height,
+	};
+	const startedAt = Date.now();
+	let opened = false;
+	imageViewTimer = window.setInterval(() => {
+		const viewing = isImageBeingViewed(imageEl, rest);
+		if (!opened) {
+			if (viewing) {
+				// A viewer opened — hide the overlays until it closes.
+				opened = true;
+				document.body.classList.add(HIDDEN_FOR_VIEWER_CLASS);
+				hideHighlightActionMenu();
+			} else if (Date.now() - startedAt > 1000) {
+				// No viewer appeared (plain image / nothing happened) — stop watching
+				// so we don't leave a timer running or flash the overlays.
+				clearImageViewTimer();
+			}
+		} else if (!viewing) {
+			// Viewer closed and the image returned to rest — restore the overlays,
+			// repositioning them in case the image moved while the viewer was open.
+			document.body.classList.remove(HIDDEN_FOR_VIEWER_CLASS);
+			updateHighlightOverlayPositions();
+			clearImageViewTimer();
+		}
+	}, 80);
+}
+
 function handleHighlightClick(event: MouseEvent) {
 	const target = event.target as Element | null;
+
+	// Outside highlighter mode, clicking a highlighted image opens it (lightbox
+	// or navigation). Watch for a viewer covering it and hide the overlays while
+	// it's open. Done before the a[href] short-circuit below because images are
+	// commonly wrapped in <a href>. The click itself is left to proceed normally.
+	if (!document.body.classList.contains('obsidian-highlighter-active')) {
+		const ov = findOverlayAtPoint(event.clientX, event.clientY);
+		if (ov?.classList.contains('obsidian-highlight-overlay-image') && ov.dataset.highlightId) {
+			const h = highlights.find((x: AnyHighlightData) => x.id === ov.dataset.highlightId);
+			const el = h ? getElementByXPath(h.xpath) : null;
+			if (el) watchImageForViewer(el);
+		}
+	}
 
 	// Clicking the action menu, selection button, or a link — let native behavior run.
 	if (target?.closest('.obsidian-highlight-action-menu, .obsidian-selection-action, a[href]')) return;
