@@ -196,7 +196,13 @@ export const BLOCK_HIGHLIGHT_TAGS = new Set(['FIGURE', 'PICTURE', 'IMG', 'TABLE'
 // Block containers the text-splitting logic uses to split a multi-block
 // selection into one TextHighlightData per paragraph-ish block.
 const TEXT_BLOCK_SPLIT_TAGS = [
-	'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'FIGCAPTION', 'TD', 'TH'
+	'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'BLOCKQUOTE', 'FIGCAPTION', 'TD', 'TH',
+	// PRE is also a block-whitelist tag (a full selection / click highlights the
+	// whole code block as an element). It must be a text block too so that a
+	// *partial* selection inside a code block becomes a text highlight on the
+	// <pre> instead of being dropped — without this, selecting code never
+	// produces a highlight because getClosestTextBlock returns null for it.
+	'PRE'
 ];
 
 export interface HighlightData {
