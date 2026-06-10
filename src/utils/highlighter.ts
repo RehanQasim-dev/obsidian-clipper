@@ -249,6 +249,7 @@ export function toggleHighlighterMenu(isActive: boolean) {
 		document.addEventListener('touchmove', handleTouchMove);
 		document.addEventListener('touchend', handleMouseUp);
 		document.addEventListener('keydown', handleKeyDown);
+		document.addEventListener('click', suppressPageClicksWhileHighlighting, true);
 		disableLinkClicks();
 		createHighlighterMenu();
 		addBrowserClassToHtml();
@@ -267,6 +268,7 @@ export function toggleHighlighterMenu(isActive: boolean) {
 		document.removeEventListener('touchmove', handleTouchMove);
 		document.removeEventListener('touchend', handleMouseUp);
 		document.removeEventListener('keydown', handleKeyDown);
+		document.removeEventListener('click', suppressPageClicksWhileHighlighting, true);
 		enableLinkClicks();
 		removeHighlighterMenu();
 		browser.runtime.sendMessage({ action: "highlighterModeChanged", isActive: false });
@@ -508,6 +510,26 @@ function removeHighlighterMenu() {
 	if (menu) {
 		menu.remove();
 	}
+}
+
+// While highlighter mode is active, a click on the page is a highlight gesture,
+// not navigation: clicking an image must draw its highlight border (done on
+// mouseup) without opening the image, following a link, or triggering a
+// lightbox. disableLinkClicks() only neutralizes <a>.onclick handlers; it
+// doesn't stop default navigation reliably, image viewers, or listeners added
+// via addEventListener. A capture-phase suppressor on document catches the
+// click before it reaches the page. stopPropagation (not stopImmediate) so our
+// own same-target capture handlers — e.g. the action-menu opener — still run.
+function suppressPageClicksWhileHighlighting(event: MouseEvent) {
+	const target = event.target as Element | null;
+	// Let our own injected UI handle its own clicks normally.
+	if (target?.closest(
+		'.obsidian-highlighter-menu, .obsidian-highlight-action-menu, .obsidian-comment-box, .obsidian-selection-action, .obsidian-reader-settings'
+	)) {
+		return;
+	}
+	event.preventDefault();
+	event.stopPropagation();
 }
 
 function disableLinkClicks() {
