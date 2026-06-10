@@ -65,6 +65,29 @@ a timer / page focus; there's also a **Sync now** button.
 
 Repeat step 5 on every other browser/machine (same Client ID, same Google account).
 
+## How syncing works
+
+Everything is automatic — the **Sync now** button is only for when you don't want
+to wait.
+
+- **Push (your edits → Drive):** automatic. Any change to a highlight, comment, or
+  drawing is pushed **~4 seconds** after you stop editing (debounced, so a burst of
+  edits goes up in one batch). You never have to push manually.
+- **Pull (Drive → this device):** automatic **every 5 minutes**, plus once when the
+  browser starts. Changes made on another device arrive within ~5 minutes.
+- **Refresh to see pulled changes:** a pull updates local storage; an already-open
+  page redraws annotations only when you **reload** it.
+- **Sync now button:** runs a full **two-way reconcile immediately** — pulls from
+  Drive, merges with local, writes the result back locally, and pushes it back up.
+  It is *not* push-only or pull-only; it's the same reconcile the auto push/pull
+  use, just on demand. Use it to skip the 4s/5-min waits (then refresh the page).
+- **Connect / Disconnect:** Connect signs in and does an initial reconcile.
+  Disconnect revokes the Google token and stops syncing (your data stays put,
+  locally and on Drive).
+
+Typical flow: edit on device A (auto-uploads in seconds) → on device B hit **Sync
+now** (or wait up to 5 min) → **refresh** the page to see it.
+
 ## How conflicts are resolved
 
 - New comments added on two devices → **both** are kept.
