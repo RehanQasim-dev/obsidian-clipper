@@ -8,6 +8,7 @@ const COMMENT_BOX_GAP = 12;
 
 let activeCommentBoxes = new Map<string, HTMLElement>();
 let editingHighlightIds = new Set<string>();
+let focusedHighlightId: string | null = null;
 let expandedCommentIndexes = new Set<string>(); // highlightId-index
 let editingNoteKey: string | null = null; // highlightId-index
 let singleClickTimer: number | null = null; // disambiguates single- vs double-click on a comment
@@ -284,6 +285,10 @@ function focusEditTextarea(highlightId: string) {
 		ta.focus({ preventScroll: true });
 		const end = ta.value.length;
 		ta.setSelectionRange(end, end);
+		// The textarea just grew to fit the note; re-run the layout so boxes below
+		// reflow and don't overlap this one (autosize happens after the initial
+		// render, so the first layout used the collapsed 1-row height).
+		renderCommentBoxes();
 	}, 0);
 }
 
@@ -291,8 +296,10 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 	const box = document.createElement('div');
 	box.className = 'obsidian-comment-box';
 	box.dataset.highlightId = highlight.id;
+	// Drives the box's permanent color-matched border (see highlighter.scss).
+	box.dataset.color = highlight.color || 'yellow';
 	box.style.width = `${COMMENT_BOX_WIDTH}px`;
-	
+
 	updateCommentBox(box, highlight);
 	
 	// Add event delegation for save/delete actions
@@ -323,21 +330,28 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		} else if (target.closest('.obsidian-comment-delete')) {
 			const noteIndex = parseInt((target.closest('.obsidian-comment-delete') as HTMLElement).dataset.index || '0');
 			deleteComment(highlight.id, noteIndex);
+		} else if (target.closest('.obsidian-comment-save-new')) {
+			const textarea = box.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement;
+			if (textarea) {
+				const text = textarea.value.trim();
+				saveComment(highlight.id, text);
+			}
 		} else if (target.closest('.obsidian-comment-text')) {
 			const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 			const noteIndex = textEl.dataset.index;
 			const expandKey = `${highlight.id}-${noteIndex}`;
-			// A double-click always fires two `click` events first. Defer the
-			// expand/collapse so the dblclick handler (edit mode) can cancel it —
-			// otherwise a single click would toggle expansion under the edit.
 			if (singleClickTimer) clearTimeout(singleClickTimer);
+			// Short delay disambiguates a single click (expand) from a double click
+			// (edit). Re-query the live element when the timer fires so the overflow
+			// check reads the current DOM rather than a possibly-stale reference.
 			singleClickTimer = window.setTimeout(() => {
 				singleClickTimer = null;
 				if (expandedCommentIndexes.has(expandKey)) {
 					expandedCommentIndexes.delete(expandKey);
-				} else if (textEl.classList.contains('has-overflow')) {
-					// Only expand if it actually overflows
-					expandedCommentIndexes.add(expandKey);
+				} else {
+					const liveEl = box.querySelector(`.obsidian-comment-text[data-index="${noteIndex}"]`) as HTMLElement | null;
+					const overflows = !!liveEl && (liveEl.classList.contains('has-overflow') || liveEl.scrollHeight > liveEl.clientHeight);
+					if (overflows) expandedCommentIndexes.add(expandKey);
 				}
 				renderCommentBoxes();
 			}, 250);
@@ -351,8 +365,6 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		const target = e.target as HTMLElement;
 		const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 		if (textEl) {
-			// Cancel the pending single-click expand/collapse so a double-click
-			// only enters edit mode.
 			if (singleClickTimer) {
 				clearTimeout(singleClickTimer);
 				singleClickTimer = null;
@@ -367,12 +379,25 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		}
 	});
 
-	// Keep the editor sized to its content as the user types.
+	// Keep the editor sized to its content as the user types, and glow the submit button.
 	box.addEventListener('input', (e) => {
 		const ta = e.target as HTMLElement;
 		if (ta instanceof HTMLTextAreaElement &&
 			(ta.classList.contains('edit-comment-textarea') || ta.classList.contains('new-comment-textarea'))) {
 			autosizeTextarea(ta);
+
+			const editorDiv = ta.closest('.obsidian-comment-editor');
+			if (editorDiv) {
+				if (ta.value.trim().length > 0) {
+					editorDiv.classList.add('has-text');
+				} else {
+					editorDiv.classList.remove('has-text');
+				}
+			}
+			// Reflow neighboring boxes as this one grows/shrinks while typing, so
+			// they never overlap. The cache in updateCommentBox keeps the textarea
+			// DOM (and the caret/text) intact across the re-layout.
+			renderCommentBoxes();
 		}
 	});
 
@@ -384,6 +409,17 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		const isNew = ta.classList.contains('new-comment-textarea');
 		const isEdit = ta.classList.contains('edit-comment-textarea');
 		if (!isNew && !isEdit) return;
+
+		if (e.key === 'Enter' && !e.shiftKey) {
+			e.preventDefault();
+			if (isNew) {
+				saveComment(highlight.id, ta.value.trim());
+			} else if (editingNoteKey) {
+				const { highlightId, index } = parseNoteKey(editingNoteKey);
+				saveEditedComment(highlightId, index, ta.value.trim());
+			}
+			return;
+		}
 
 		if (e.key === 'Escape') {
 			e.preventDefault();
@@ -410,43 +446,64 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 	const notes = highlight.notes || [];
 	const isEditing = editingHighlightIds.has(highlight.id);
-	
+	const isFocused = focusedHighlightId === highlight.id || isEditing;
+
+	// Focus state is reflected as a class (not baked into the HTML) so the box's
+	// rendered markup is identical whether or not it's focused. That keeps the
+	// DOM stable across a focus change, which is essential: rebuilding innerHTML
+	// on focus used to detach the very element the user just clicked, swallowing
+	// that click — so expanding a comment took two clicks (one to focus, one to
+	// expand). With visibility driven by CSS, a single click both focuses and
+	// expands. Applied before the cache short-circuit so focus always updates.
+	box.classList.toggle('is-focused', isFocused);
+	// No comments yet → collapse the outer card so the new-comment field is a
+	// single slim box rather than a box-within-a-box.
+	box.classList.toggle('is-empty', notes.length === 0);
+
 	let html = '';
-	
+
+	// The comment editor / reply field. Always rendered (hidden via CSS unless
+	// the box is focused) so toggling focus never rebuilds the DOM. It sits after
+	// the comment list, so the reply field is always at the end of the thread.
+	const editorHtml = `
+		<div class="obsidian-comment-editor sleek-input">
+			<textarea class="new-comment-textarea" placeholder="${notes.length > 0 ? 'Reply…' : 'Add a comment…'}" rows="1"></textarea>
+			<button class="obsidian-comment-save-new" aria-label="Submit">
+				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+			</button>
+		</div>
+	`;
+
 	if (notes.length > 0) {
 		html += `<div class="obsidian-comment-list">`;
 		notes.forEach((note, index) => {
 			const isExpanded = expandedCommentIndexes.has(`${highlight.id}-${index}`);
 			const isEditingThisNote = editingNoteKey === `${highlight.id}-${index}`;
 			const parsed = parseNoteString(note);
-			const timeHtml = parsed.timestamp ? `<div class="obsidian-comment-timestamp">${formatTime(parsed.timestamp)}</div>` : '<div></div>';
-			
+
 			let displayHtml = escapeHtml(parsed.text);
 			displayHtml = renderInlineMarkdown(displayHtml);
-			// Require a boundary before '#' so it tags real hashtags but not the
-			// fragment in a URL like http://x#section.
 			displayHtml = displayHtml.replace(/(^|\s)(#[a-zA-Z0-9_-]+)/g, '$1<span class="obsidian-inline-tag">$2</span>');
 
 			if (isEditingThisNote) {
 				html += `
 					<div class="obsidian-comment-item">
-						<div class="obsidian-comment-editor">
-							<textarea class="edit-comment-textarea" rows="3">${escapeHtml(parsed.text)}</textarea>
-							<div class="obsidian-comment-actions">
-								<button class="obsidian-comment-cancel-edit">Cancel</button>
-								<button class="obsidian-comment-save-edit mod-cta">Save</button>
-							</div>
+						<div class="obsidian-comment-editor sleek-input is-editing">
+							<textarea class="edit-comment-textarea" rows="1">${escapeHtml(parsed.text)}</textarea>
+							<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete">
+								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+							</button>
 						</div>
 					</div>
 				`;
 			} else {
+				// Threaded layout: a header line (colored dot on the thread rail +
+				// timestamp + hover actions), with the comment text beneath it.
 				html += `
 					<div class="obsidian-comment-item">
 						<div class="obsidian-comment-item-header">
-							<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${displayHtml}</div>
-						</div>
-						<div class="obsidian-comment-item-footer">
-							${timeHtml}
+							<span class="obsidian-comment-dot"></span>
+							${parsed.timestamp ? `<span class="obsidian-comment-timestamp">${formatTime(parsed.timestamp)}</span>` : '<span class="obsidian-comment-timestamp"></span>'}
 							<div class="obsidian-comment-actions-inline">
 								<button class="obsidian-comment-edit" data-index="${index}" aria-label="Edit comment">
 									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
@@ -456,6 +513,7 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 								</button>
 							</div>
 						</div>
+						<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${displayHtml}</div>
 					</div>
 				`;
 			}
@@ -463,26 +521,13 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 		html += `</div>`;
 	}
 
-	if (isEditing) {
-		html += `
-			<div class="obsidian-comment-editor">
-				<textarea class="new-comment-textarea" placeholder="Add a comment..." rows="3"></textarea>
-				<div class="obsidian-comment-actions">
-					<button class="obsidian-comment-cancel">Cancel</button>
-					<button class="obsidian-comment-save mod-cta">Save</button>
-				</div>
-			</div>
-		`;
-	} else if (!editingNoteKey?.startsWith(highlight.id + '-')) {
-		html += `
-			<button class="obsidian-comment-add-more" onclick="window.dispatchEvent(new CustomEvent('obsidian-add-comment', {detail: '${highlight.id}'}))">
-				Add reply...
-			</button>
-		`;
-	}
+	html += editorHtml;
 
 	// Only touch the DOM when the rendered content actually changed. An open
 	// editor's textarea value (and the add-comment editor's emptiness) is not
+	// Keep the color-matched border in sync if the highlight was recolored.
+	box.dataset.color = highlight.color || 'yellow';
+
 	// part of `html`, so skipping the rebuild preserves whatever the user has
 	// typed and keeps the Save/Cancel buttons attached across re-renders.
 	if (boxRenderCache.get(box) === html) return;
@@ -498,10 +543,18 @@ window.addEventListener('obsidian-add-comment', ((e: CustomEvent) => {
 // boxes. Reads each editor's current text and saves it (empty text just closes
 // the editor, same as Cancel).
 function commitOpenEditors() {
+	if (focusedHighlightId) {
+		const ta = activeCommentBoxes.get(focusedHighlightId)?.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement | null;
+		if (ta && ta.value.trim()) {
+			saveComment(focusedHighlightId, ta.value.trim());
+		}
+	}
 	// Snapshot ids first: saveComment() mutates editingHighlightIds mid-loop.
 	for (const id of Array.from(editingHighlightIds)) {
 		const ta = activeCommentBoxes.get(id)?.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement | null;
-		saveComment(id, ta ? ta.value.trim() : '');
+		if (ta && ta.value.trim()) {
+			saveComment(id, ta.value.trim());
+		}
 	}
 	if (editingNoteKey) {
 		const { highlightId, index } = parseNoteKey(editingNoteKey);
@@ -515,40 +568,59 @@ function commitOpenEditors() {
 	}
 }
 
-// Pressing anywhere outside the comment boxes auto-saves any open comment.
-// mousedown (not click) so it fires before a Ctrl+click's later `click` opens
-// a new editor — otherwise we'd immediately close the editor just opened.
 document.addEventListener('mousedown', (e) => {
 	const target = e.target as HTMLElement | null;
-	if (target?.closest('.obsidian-comment-box')) return;
-	if (editingHighlightIds.size === 0 && !editingNoteKey) return;
-	commitOpenEditors();
+	const box = target?.closest('.obsidian-comment-box') as HTMLElement | null;
+
+	if (!box) {
+		let changed = false;
+		if (editingHighlightIds.size > 0 || editingNoteKey || focusedHighlightId) {
+			commitOpenEditors();
+			changed = true;
+		}
+		if (focusedHighlightId) {
+			focusedHighlightId = null;
+			changed = true;
+		}
+		if (expandedCommentIndexes.size > 0) {
+			expandedCommentIndexes.clear();
+			changed = true;
+		}
+		if (changed) renderCommentBoxes();
+		return;
+	}
+
+	const highlightId = Array.from(activeCommentBoxes.entries()).find(([_, b]) => b === box)?.[0];
+	if (highlightId && focusedHighlightId !== highlightId) {
+		if (editingHighlightIds.size > 0 || editingNoteKey || focusedHighlightId) {
+			commitOpenEditors();
+		}
+		focusedHighlightId = highlightId;
+		renderCommentBoxes();
+	}
 }, true);
 
 function saveComment(highlightId: string, text: string) {
-	// Guard against double-fire: the editor only exists while the id is in the
-	// editing set. Once we've saved (which clears it), a stray repeat click
-	// must not push the same note again.
-	if (!editingHighlightIds.has(highlightId)) return;
-
 	if (!text) {
 		stopAddingComment(highlightId);
+		if (focusedHighlightId === highlightId) {
+			focusedHighlightId = null;
+			renderCommentBoxes();
+		}
 		return;
 	}
 	
 	const formattedText = `${text}<!--timestamp:${Date.now()}-->`;
-	
+
 	const highlight = highlights.find(h => h.id === highlightId);
 	if (highlight) {
-		if (!highlight.notes) highlight.notes = [];
-		highlight.notes.push(formattedText);
-		// A freshly saved comment should display collapsed (clamped to 3 lines).
-		// Clear any stale expand state for this index — e.g. left behind when a
-		// prior comment at the same index was edited (dblclick adds the key) or
-		// deleted without cleanup.
-		expandedCommentIndexes.delete(`${highlightId}-${highlight.notes.length - 1}`);
-		// Update global highlights array
-		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
+		// Build a NEW highlight object (don't mutate in place) so updateHighlights'
+		// pre-change snapshot keeps the old notes — that's what makes Ctrl+Z able to
+		// remove a just-added comment.
+		const newNotes = [...(highlight.notes || []), formattedText];
+		expandedCommentIndexes.delete(`${highlightId}-${newNotes.length - 1}`);
+		const updated = { ...highlight, notes: newNotes };
+		const newHighlights = highlights.map(h => h.id === highlightId ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 	}
@@ -568,13 +640,12 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 		const ts = oldParsed.timestamp || Date.now();
 		// Keep the original creation timestamp (the comment's stable id) but record
 		// a fresh edit time so cross-device merges keep the most recent edit.
-		highlight.notes[index] = `${text}<!--timestamp:${ts}--><!--edited:${Date.now()}-->`;
-		// Collapse the comment after editing — the dblclick that opened the editor
-		// added this key to the expanded set; drop it so a long edited comment
-		// shows clamped, matching a freshly saved one.
+		// Build new objects so the undo snapshot retains the pre-edit text.
+		const newNotes = highlight.notes.map((n, i) =>
+			i === index ? `${text}<!--timestamp:${ts}--><!--edited:${Date.now()}-->` : n);
 		expandedCommentIndexes.delete(`${highlightId}-${index}`);
-
-		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
+		const updated = { ...highlight, notes: newNotes };
+		const newHighlights = highlights.map(h => h.id === highlightId ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 		renderCommentBoxes();
@@ -584,8 +655,10 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 function deleteComment(highlightId: string, index: number) {
 	const highlight = highlights.find(h => h.id === highlightId);
 	if (highlight && highlight.notes) {
-		highlight.notes.splice(index, 1);
-		const newHighlights = highlights.map(h => h.id === highlightId ? highlight : h);
+		// New objects (no in-place splice) so undo can restore the deleted comment.
+		const newNotes = highlight.notes.filter((_, i) => i !== index);
+		const updated = { ...highlight, notes: newNotes };
+		const newHighlights = highlights.map(h => h.id === highlightId ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 		setActiveHighlight(null); // clear emphasis in case the box is removed

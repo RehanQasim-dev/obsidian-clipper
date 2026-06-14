@@ -149,25 +149,31 @@ export function clearTextHighlights(): void {
 //   - image / element → a purple glow on the overlay div.
 // The purple accent matches the comment box's hover ring, tying the two ends
 // of the association together visually.
-const ACTIVE_HIGHLIGHT_NAME = 'obsidian-highlight-active';
-let activeHighlightInstance: HighlightInstance | null = null;
+// One active-emphasis layer per color, so the emphasized highlight keeps its
+// own color (no purple wash) and gains a bright, solid underline in that same
+// color (styled in highlighter.scss). A single color-agnostic layer couldn't
+// match the underline to the highlight's color.
+const ACTIVE_HIGHLIGHT_COLORS = ['yellow', 'red', 'green'] as const;
+const activeHighlightInstances = new Map<string, HighlightInstance>();
 let activeOverlayId: string | null = null;
 
-function ensureActiveHighlight(): HighlightInstance | null {
+function ensureActiveHighlight(color: string): HighlightInstance | null {
+	const safeColor = (ACTIVE_HIGHLIGHT_COLORS as readonly string[]).includes(color) ? color : 'yellow';
+	const existing = activeHighlightInstances.get(safeColor);
+	if (existing) return existing;
 	const registry = getHighlightRegistry();
 	const HighlightCtor = (window as unknown as { Highlight?: new () => HighlightInstance }).Highlight;
 	if (!registry || !HighlightCtor) return null;
-	if (activeHighlightInstance) return activeHighlightInstance;
 	const inst = new HighlightCtor();
 	inst.priority = 10; // above the color highlights so the emphasis wins
-	registry.set(ACTIVE_HIGHLIGHT_NAME, inst);
-	activeHighlightInstance = inst;
+	registry.set(`obsidian-highlight-active-${safeColor}`, inst);
+	activeHighlightInstances.set(safeColor, inst);
 	return inst;
 }
 
 export function setActiveHighlight(id: string | null): void {
-	// Clear any previous emphasis (both kinds — we don't track which it was).
-	activeHighlightInstance?.clear();
+	// Clear any previous emphasis (all colors + the element overlay).
+	activeHighlightInstances.forEach(inst => inst.clear());
 	if (activeOverlayId) {
 		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${activeOverlayId}"]`)
 			.forEach(el => el.classList.remove('is-active'));
@@ -179,7 +185,7 @@ export function setActiveHighlight(id: string | null): void {
 	if (!highlight) return;
 
 	if (highlight.type === 'text') {
-		const inst = ensureActiveHighlight();
+		const inst = ensureActiveHighlight(highlight.color || 'yellow');
 		const ranges = textHighlightRanges.get(id);
 		if (inst && ranges) ranges.forEach(r => inst.add(r));
 	} else {

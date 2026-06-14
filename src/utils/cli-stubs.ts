@@ -15,6 +15,8 @@ export const generalSettings: Settings = {
 	highlighterEnabled: false,
 	alwaysShowHighlights: false,
 	highlightBehavior: 'no-highlights',
+	commentTheme: 'slate',
+	commentTextSize: 'default',
 	showMoreActionsButton: false,
 	interpreterModel: '',
 	models: [],

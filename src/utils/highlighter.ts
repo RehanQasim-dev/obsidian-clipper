@@ -13,6 +13,7 @@ import { detectBrowser, addBrowserClassToHtml } from './browser-detection';
 import dayjs from 'dayjs';
 import { generalSettings, loadSettings } from './storage-utils';
 import { renderCommentBoxes, clearCommentBoxes } from './comment-overlays';
+import { pushUndo, undoLast, redoLast, canUndo as mgrCanUndo, canRedo as mgrCanRedo, onUndoHistoryChange } from './undo-manager';
 
 /**
  * Helper function to create SVG elements
@@ -177,15 +178,11 @@ let lastAppliedVersion = -1;
 function bumpHighlightsVersion() { highlightsVersion++; }
 let originalLinkClickHandlers: WeakMap<HTMLElement, (event: MouseEvent) => void> = new WeakMap();
 
-interface HistoryAction {
-	type: 'add' | 'remove';
-	oldHighlights: AnyHighlightData[];
-	newHighlights: AnyHighlightData[];
-}
-
-let highlightHistory: HistoryAction[] = [];
-let redoHistory: HistoryAction[] = [];
-const MAX_HISTORY_LENGTH = 30;
+// Highlight/comment changes feed into the shared, cross-tool undo stack
+// (undo-manager) rather than a private history, so Ctrl+Z reverts the user's
+// most recent action whether it was a highlight, a comment, or a pencil stroke.
+// Keep the highlighter menu's undo/redo buttons in sync with that shared state.
+onUndoHistoryChange(() => updateUndoRedoButtons());
 
 // Block elements highlighted as a whole unit rather than as the text inside
 // them. Click one (in highlighter mode) to highlight the whole block; when a
@@ -288,37 +285,28 @@ export function toggleHighlighterMenu(isActive: boolean) {
 }
 
 export function canUndo(): boolean {
-	return highlightHistory.length > 0;
+	return mgrCanUndo();
 }
 
 export function canRedo(): boolean {
-	return redoHistory.length > 0;
+	return mgrCanRedo();
 }
 
+// Restore a highlights snapshot recorded in an undo entry, then re-render.
+function restoreHighlights(snapshot: AnyHighlightData[]) {
+	highlights = [...snapshot];
+	bumpHighlightsVersion();
+	commitHighlightChanges();
+}
+
+// The highlighter menu's undo/redo buttons act on the shared stack — they may
+// revert a pencil stroke too, which is intentional (one chronological history).
 export function undo() {
-	if (canUndo()) {
-		const lastAction = highlightHistory.pop();
-		if (lastAction) {
-			redoHistory.push(lastAction);
-			highlights = [...lastAction.oldHighlights];
-			bumpHighlightsVersion();
-			commitHighlightChanges();
-			updateUndoRedoButtons();
-		}
-	}
+	undoLast();
 }
 
 export function redo() {
-	if (canRedo()) {
-		const nextAction = redoHistory.pop();
-		if (nextAction) {
-			highlightHistory.push(nextAction);
-			highlights = [...nextAction.newHighlights];
-			bumpHighlightsVersion();
-			commitHighlightChanges();
-			updateUndoRedoButtons();
-		}
-	}
+	redoLast();
 }
 
 function updateUndoRedoButtons() {
@@ -1319,13 +1307,6 @@ export function updateHighlighterMenu() {
 function handleKeyDown(event: KeyboardEvent) {
 	if (event.key === 'Escape' && document.body.classList.contains('obsidian-highlighter-active')) {
 		exitHighlighterMode();
-	} else if ((event.metaKey || event.ctrlKey) && event.key === 'z') {
-		event.preventDefault();
-		if (event.shiftKey) {
-			redo();
-		} else {
-			undo();
-		}
 	} else if (event.key === '1' || event.key === '2' || event.key === '3') {
 		if (document.body.classList.contains('obsidian-highlighter-active')) {
 			const colors: Array<'yellow' | 'red' | 'green'> = ['yellow', 'red', 'green'];
@@ -1347,13 +1328,13 @@ function exitHighlighterMode() {
 }
 
 function addToHistory(type: 'add' | 'remove', oldHighlights: AnyHighlightData[], newHighlights: AnyHighlightData[]) {
-	highlightHistory.push({ type, oldHighlights, newHighlights });
-	if (highlightHistory.length > MAX_HISTORY_LENGTH) {
-		highlightHistory.shift();
-	}
-	// Clear redo history when a new action is performed
-	redoHistory = [];
-	updateUndoRedoButtons();
+	// Push onto the shared cross-tool stack. Snapshots are the arrays captured
+	// before/after the change; callers create new highlight objects on mutation
+	// (rather than mutating in place) so these snapshots stay valid for undo.
+	pushUndo({
+		undo: () => restoreHighlights(oldHighlights),
+		redo: () => restoreHighlights(newHighlights),
+	});
 }
 
 // Nearest ancestor block that wraps a text selection fragment (the unit by

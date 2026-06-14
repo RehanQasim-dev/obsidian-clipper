@@ -80,6 +80,9 @@ export interface Settings {
 	highlighterEnabled: boolean;
 	alwaysShowHighlights: boolean;
 	highlightBehavior: string;
+	// On-page comment box appearance.
+	commentTheme: 'slate' | 'charcoal' | 'oled' | 'warm';
+	commentTextSize: 'small' | 'default' | 'large';
 	interpreterModel?: string;
 	models: ModelConfig[];
 	providers: Provider[];

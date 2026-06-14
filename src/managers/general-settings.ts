@@ -427,6 +427,22 @@ function initializeHighlighterSettings(): void {
 			saveSettings({ ...generalSettings, highlightBehavior: highlightBehaviorSelect.value });
 		});
 	}
+
+	const commentThemeSelect = document.getElementById('comment-theme') as HTMLSelectElement;
+	if (commentThemeSelect) {
+		commentThemeSelect.value = generalSettings.commentTheme;
+		commentThemeSelect.addEventListener('change', () => {
+			saveSettings({ ...generalSettings, commentTheme: commentThemeSelect.value as Settings['commentTheme'] });
+		});
+	}
+
+	const commentTextSizeSelect = document.getElementById('comment-text-size') as HTMLSelectElement;
+	if (commentTextSizeSelect) {
+		commentTextSizeSelect.value = generalSettings.commentTextSize;
+		commentTextSizeSelect.addEventListener('change', () => {
+			saveSettings({ ...generalSettings, commentTextSize: commentTextSizeSelect.value as Settings['commentTextSize'] });
+		});
+	}
 }
 
 async function initializeUsageChart(): Promise<void> {

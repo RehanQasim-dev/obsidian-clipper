@@ -1,6 +1,7 @@
 import browser from './utils/browser-polyfill';
 import * as highlighter from './utils/highlighter';
 import * as pencil from './utils/pencil-overlays';
+import { undoLast, redoLast } from './utils/undo-manager';
 import { removeExistingHighlights } from './utils/highlighter-overlays';
 import { loadSettings, generalSettings } from './utils/storage-utils';
 import { getDomain } from './utils/string-utils';
@@ -421,8 +422,27 @@ declare global {
 		return highlighterCSSPromise;
 	}
 
+	// Reflect the chosen comment-box theme / text-size onto <body> so the CSS in
+	// highlighter.css can style the boxes accordingly (they're appended to body).
+	function applyCommentAppearance() {
+		document.body.dataset.obCommentTheme = generalSettings.commentTheme || 'slate';
+		document.body.dataset.obCommentSize = generalSettings.commentTextSize || 'default';
+	}
+
+	// Live-update the comment appearance when the setting changes in the options
+	// tab, without needing a page reload (settings live in storage.sync).
+	browser.storage.onChanged.addListener((changes, area) => {
+		if (area !== 'sync' || !changes.highlighter_settings) return;
+		const hs = (changes.highlighter_settings.newValue || {}) as {
+			commentTheme?: string; commentTextSize?: string;
+		};
+		if (hs.commentTheme) document.body.dataset.obCommentTheme = hs.commentTheme;
+		if (hs.commentTextSize) document.body.dataset.obCommentSize = hs.commentTextSize;
+	});
+
 	async function initializeHighlighter() {
 		await loadSettings();
+		applyCommentAppearance();
 
 		await highlighter.loadHighlights();
 		highlighter.setPageTitle(document.title);
@@ -493,6 +513,20 @@ declare global {
 		if (e.altKey && (e.key === 'e' || e.key === 'E')) {
 			e.preventDefault();
 			browser.runtime.sendMessage({ action: "open_dashboard" });
+			return;
+		}
+
+		// Unified undo/redo across highlights, comments, and pencil strokes. The
+		// early-return above lets native text undo win inside comment editors and
+		// form fields. Ctrl/Cmd+Z undoes the most recent annotation action of any
+		// type; add Shift to redo.
+		if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+			e.preventDefault();
+			if (e.shiftKey) {
+				redoLast();
+			} else {
+				undoLast();
+			}
 			return;
 		}
 

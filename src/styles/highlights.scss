@@ -158,6 +158,29 @@
 	}
 }
 
+// Global highlight search (moved off inline styles in highlights.html).
+.highlights-search-main-container {
+	flex: 1;
+	margin: 0 20px;
+
+	input {
+		width: 100%;
+		max-width: 400px;
+		padding: 6px 12px;
+		border-radius: 6px;
+		border: 1px solid var(--background-modifier-border);
+		background: var(--background-primary);
+		color: var(--text-normal);
+		font-family: var(--font-default);
+		font-size: var(--font-ui-small);
+
+		&:focus {
+			outline: none;
+			border-color: var(--interactive-accent);
+		}
+	}
+}
+
 #highlights-breadcrumb {
 	display: flex;
 	align-items: center;
@@ -259,23 +282,37 @@ h1.highlight-page-title {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
-	padding: 4px 0 8px;
+	padding: 4px 0 10px;
+	margin-bottom: 10px;
+	// Hairline divider so each website's section reads as a distinct heading,
+	// especially in the "all pages" view where many sites are stacked.
+	border-bottom: 1px solid var(--background-modifier-border);
 }
 
 .highlight-page-title-row {
-
 	display: flex;
-	align-items: start;
-	gap: 12px;
+	align-items: center;
+	gap: 10px;
+}
+
+// Website favicon beside the title — the strongest at-a-glance cue that this is
+// a new site's section.
+.highlight-page-favicon {
+	width: 18px;
+	height: 18px;
+	flex-shrink: 0;
+	border-radius: 4px;
+	object-fit: contain;
+	color: var(--text-muted);
 }
 
 .highlight-page-title {
 	--link-external-decoration: none;
 	--link-external-decoration-hover: none;
 	--link-external-color: var(--text-normal);
-	--link-external-color-hover: var(--text-normal);
+	--link-external-color-hover: var(--text-accent);
 	font-weight: 700;
-	font-size: 1.25em;
+	font-size: 1.3em;
 	line-height: 1.3;
 	text-wrap-style: pretty;
 }
@@ -408,14 +445,30 @@ h1.highlight-page-title {
 // --- Highlight items ---
 
 .highlight-item {
+	// Per-highlight color (RGB triplet) drives the left rail + faint tint, so the
+	// list is color-scannable and matches the live page. Defaults to yellow.
+	--hl-color: 245, 184, 0;
+
 	position: relative;
-	padding: 1.5em;
-	margin: 1em 0;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
-	background-color: var(--background-primary);
-	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-	
+	padding: 0.85em 1em 0.85em 1.1em;
+	margin: 0;
+	border: none;
+	border-radius: 0;
+	// Solid color rail on the left edge + a very faint tint of the same color.
+	border-left: 3px solid rgb(var(--hl-color));
+	background-color: rgba(var(--hl-color), 0.05);
+	box-shadow: none;
+
+	// Hairline divider between stacked highlights (slim, flat list — no per-item
+	// card). The rail/tint already separates them by color.
+	& + .highlight-item {
+		margin-top: 0.6em;
+	}
+
+	&[data-color="yellow"] { --hl-color: 245, 184, 0; }
+	&[data-color="red"]    { --hl-color: 255, 99, 132; }
+	&[data-color="green"]  { --hl-color: 63, 174, 107; }
+
 	.image-expand-button {
 		display: none !important;
 	}
@@ -445,12 +498,12 @@ h1.highlight-page-title {
 .highlight-item-note-container {
 	display: flex;
 	flex-direction: column;
-	margin-top: 8px;
-	padding: 12px 16px;
-	border: 1px solid var(--background-modifier-border);
-	border-left: 4px solid var(--interactive-accent);
+	margin-top: 6px;
+	padding: 7px 12px;
+	// Accent matches the highlight's color so a comment visibly belongs to it.
+	border-left: 3px solid rgb(var(--hl-color));
 	background-color: var(--background-secondary);
-	border-radius: 6px;
+	border-radius: 0 6px 6px 0;
 }
 
 .highlight-item-note {
@@ -461,10 +514,10 @@ h1.highlight-page-title {
 }
 
 .highlight-comment-thread {
-	margin-top: 16px;
+	margin-top: 8px;
 	display: flex;
 	flex-direction: column;
-	gap: 8px;
+	gap: 6px;
 }
 
 .highlight-item-actions-container {

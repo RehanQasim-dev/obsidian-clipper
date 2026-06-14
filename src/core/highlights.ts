@@ -1055,6 +1055,31 @@ function createPageHeader(url: string, domain: string, title?: string): HTMLElem
 	const titleRow = document.createElement('div');
 	titleRow.className = 'highlight-page-title-row';
 
+	// Favicon makes each website's section read as a distinct heading in the
+	// "all pages" view. Falls back to a globe icon when no favicon is stored.
+	const normalizedDomain = domain.replace(/^www\./, '');
+	const headerFavicon = domainSettingsMap[normalizedDomain]?.favicon;
+	if (headerFavicon) {
+		const img = document.createElement('img');
+		img.className = 'highlight-page-favicon';
+		img.src = headerFavicon;
+		img.width = 18;
+		img.height = 18;
+		img.onerror = () => {
+			const globe = document.createElement('i');
+			globe.className = 'highlight-page-favicon';
+			globe.setAttribute('data-lucide', 'globe');
+			img.replaceWith(globe);
+			createIcons({ icons });
+		};
+		titleRow.appendChild(img);
+	} else {
+		const globe = document.createElement('i');
+		globe.className = 'highlight-page-favicon';
+		globe.setAttribute('data-lucide', 'globe');
+		titleRow.appendChild(globe);
+	}
+
 	const titleLink = document.createElement('a');
 	titleLink.className = 'highlight-page-title';
 	titleLink.href = '#';
@@ -1234,6 +1259,9 @@ function createHighlightItem(entries: HighlightEntry[], pageUrl: string): HTMLEl
 	const item = document.createElement('div');
 	item.className = 'highlight-item';
 	item.setAttribute('data-unit-key', unitKey(entries));
+	// Surface the highlight's color so the list shows a color rail + tint
+	// matching the live page. Grouped pieces share a color, so the first wins.
+	item.setAttribute('data-color', entries[0]?.data.color || 'yellow');
 
 	const content = document.createElement('div');
 	content.className = 'highlight-item-content';

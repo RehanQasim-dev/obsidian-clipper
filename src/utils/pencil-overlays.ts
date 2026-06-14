@@ -1,5 +1,6 @@
 import browser from './browser-polyfill';
 import { normalizeUrl } from './highlighter';
+import { pushUndo } from './undo-manager';
 
 // Freehand pencil tool. Unlike highlights (which anchor to DOM nodes via XPath
 // and reflow with the page), pencil strokes are raw pixel paths stored in
@@ -359,11 +360,42 @@ function clearSelection(): void {
 
 function deleteSelected(): void {
 	if (selectedIds.size === 0) return;
+	const before = cloneStrokes(strokes);
 	strokes = strokes.filter(s => !selectedIds.has(s.id));
+	selectedIds.clear();
+	commitStrokeChange(before);
+}
+
+// --- Undo integration --------------------------------------------------------
+//
+// Each completed stroke, deletion, and recolor records an entry on the shared
+// undo stack so Ctrl+Z (handled globally in content.ts) reverts the user's last
+// pencil action — e.g. removing the last line drawn in one go. Snapshots are
+// deep-cloned so later mutations can't corrupt a recorded history entry.
+
+function cloneStrokes(arr: PencilStroke[]): PencilStroke[] {
+	return arr.map(s => ({ ...s, points: [...s.points] }));
+}
+
+function restoreStrokes(snapshot: PencilStroke[]): void {
+	strokes = cloneStrokes(snapshot);
 	selectedIds.clear();
 	saveDrawings();
 	renderStrokes();
 	syncListeners();
+}
+
+// Call after applying a stroke mutation, passing the pre-mutation snapshot.
+// Persists + re-renders the current state and records the before/after pair.
+function commitStrokeChange(before: PencilStroke[]): void {
+	const after = cloneStrokes(strokes);
+	saveDrawings();
+	renderStrokes();
+	syncListeners();
+	pushUndo({
+		undo: () => restoreStrokes(before),
+		redo: () => restoreStrokes(after),
+	});
 }
 
 // --- Selection sub-mode (Ctrl held) ------------------------------------------
@@ -515,8 +547,12 @@ function onPointerUp(event: PointerEvent): void {
 	drawing = false;
 	event.preventDefault();
 	if (currentPoints.length >= 4) {
+		const before = cloneStrokes(strokes);
 		strokes.push({ id: genId(), color: currentColor, width: STROKE_WIDTH, points: currentPoints });
-		saveDrawings();
+		livePath = null;
+		currentPoints = [];
+		commitStrokeChange(before);
+		return;
 	}
 	livePath = null;
 	currentPoints = [];
@@ -556,6 +592,7 @@ function onKeyDown(event: KeyboardEvent): void {
 		// Retint any selected strokes too, so the number keys recolor existing
 		// lines as well as setting the color for the next one.
 		if (selectedIds.size > 0) {
+			const before = cloneStrokes(strokes);
 			let changed = false;
 			for (const s of strokes) {
 				if (selectedIds.has(s.id)) {
@@ -564,8 +601,7 @@ function onKeyDown(event: KeyboardEvent): void {
 				}
 			}
 			if (changed) {
-				saveDrawings();
-				renderStrokes();
+				commitStrokeChange(before);
 			}
 		}
 	}

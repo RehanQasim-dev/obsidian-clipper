@@ -95,6 +95,39 @@
 	"clipBehavior": {
 		"message": "Clip behavior"
 	},
+	"commentTheme": {
+		"message": "Comment box theme"
+	},
+	"commentThemeDescription": {
+		"message": "Color theme for the on-page comment boxes."
+	},
+	"commentThemeSlate": {
+		"message": "Slate (blue-gray)"
+	},
+	"commentThemeCharcoal": {
+		"message": "Charcoal"
+	},
+	"commentThemeOled": {
+		"message": "OLED black"
+	},
+	"commentThemeWarm": {
+		"message": "Warm dark"
+	},
+	"commentTextSize": {
+		"message": "Comment text size"
+	},
+	"commentTextSizeDescription": {
+		"message": "Text size inside the on-page comment boxes."
+	},
+	"commentTextSizeSmall": {
+		"message": "Small"
+	},
+	"commentTextSizeDefault": {
+		"message": "Default"
+	},
+	"commentTextSizeLarge": {
+		"message": "Large"
+	},
 	"clipBehaviorDescription": {
 		"message": "Choose how highlighted content is saved to Obsidian. Defines the $strong_start${{content}}$strong_end$ variable.",
 		"placeholders": {

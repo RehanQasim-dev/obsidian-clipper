@@ -177,13 +177,31 @@ body.obsidian-highlighter-active {
 	background-color: rgba(75, 192, 120, 0.35);
 }
 
-// Active emphasis (shown while hovering the associated comment box). Purple to
-// match the comment box's hover ring, with an underline so it reads as
-// "this one" even where the tint is subtle.
-::highlight(obsidian-highlight-active) {
-	background-color: rgba(137, 93, 244, 0.35);
+// Active emphasis (shown while hovering the associated comment box). The
+// highlight KEEPS its own color unchanged — the active layer adds NO background
+// (a tint here would paint over the base layer and brighten it), only a bright,
+// solid underline in the matching color so it reads as "this one". One layer
+// per color so the underline can match the highlight.
+::highlight(obsidian-highlight-active-yellow) {
+	background-color: transparent;
 	text-decoration: underline;
-	text-decoration-color: #895DF4;
+	text-decoration-color: #f5b800;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 1px;
+}
+::highlight(obsidian-highlight-active-red) {
+	background-color: transparent;
+	text-decoration: underline;
+	text-decoration-color: #ff3355;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 1px;
+}
+::highlight(obsidian-highlight-active-green) {
+	background-color: transparent;
+	text-decoration: underline;
+	text-decoration-color: #1fad54;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 1px;
 }
 
 .obsidian-highlight-color-btn {
@@ -481,81 +499,178 @@ body {
 	transition: padding-right 0.2s ease;
 }
 
+// --- Comment box theme palettes ---------------------------------------------
+//
+// The on-page comment box always uses a chosen DARK theme (set in the
+// extension settings; default Slate), regardless of the page's light/dark mode
+// — it's an overlay, like a tooltip. The theme is applied via a data attribute
+// on <body> (set in content.ts) and resolves to a set of CSS variables. Text
+// size is likewise driven by a body data attribute.
+body[data-ob-comment-theme="slate"] .obsidian-comment-box {
+	--ob-box-bg: 27, 32, 48; // #1b2030
+	--ob-text: #cdd6e6;
+	--ob-muted: #8a93a6;
+	--ob-divider: rgba(255, 255, 255, 0.10);
+}
+body[data-ob-comment-theme="charcoal"] .obsidian-comment-box {
+	--ob-box-bg: 30, 30, 30; // #1e1e1e
+	--ob-text: #e6e6e6;
+	--ob-muted: #9a9a9a;
+	--ob-divider: rgba(255, 255, 255, 0.10);
+}
+body[data-ob-comment-theme="oled"] .obsidian-comment-box {
+	--ob-box-bg: 10, 10, 10; // #0a0a0a
+	--ob-text: #ededed;
+	--ob-muted: #8c8c8c;
+	--ob-divider: rgba(255, 255, 255, 0.13);
+}
+body[data-ob-comment-theme="warm"] .obsidian-comment-box {
+	--ob-box-bg: 33, 28, 23; // #211c17
+	--ob-text: #ece3d4;
+	--ob-muted: #b3a892;
+	--ob-divider: rgba(255, 255, 255, 0.10);
+}
+
+body[data-ob-comment-size="small"] .obsidian-comment-box { --ob-font: 13px; }
+body[data-ob-comment-size="default"] .obsidian-comment-box { --ob-font: 14.5px; }
+body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 16px; }
+
 .obsidian-comment-box {
+	// Theme palette — defaults to Slate so the box looks right even before the
+	// body attribute is set. RGB triplet for the surface; hex for text/muted.
+	--ob-box-bg: 27, 32, 48;          // #1b2030
+	--ob-text: #cdd6e6;
+	--ob-muted: #8a93a6;
+	--ob-divider: rgba(255, 255, 255, 0.10);
+	// Comment text size (overridden per body[data-ob-comment-size]).
+	--ob-font: 14.5px;
+
+	// Per-highlight color (RGB triplet) used for the permanent, color-matched
+	// border — so each box visibly belongs to its highlight's color. Overridden
+	// per data-color below; defaults to yellow.
+	--ob-comment-color: 245, 184, 0;
+
 	position: absolute;
-	background: rgba(255, 255, 255, 0.92);
-	backdrop-filter: blur(8px);
-	-webkit-backdrop-filter: blur(8px);
-	border: 1px solid rgba(0, 0, 0, 0.1);
-	border-radius: 8px;
-	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-	padding: 8px;
+	background: rgba(var(--ob-box-bg), 0.98);
+	backdrop-filter: blur(6px);
+	-webkit-backdrop-filter: blur(6px);
+	// Permanent muted border in the highlight's color (all borders are muted by
+	// default; the active state brightens it — see &.is-active).
+	border: 1px solid rgba(var(--ob-comment-color), 0.4);
+	border-radius: 10px;
+	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+	padding: 8px 10px;
 	font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
 	z-index: 999999998;
-	color: #333;
+	color: var(--ob-text);
 	box-sizing: border-box;
 	transition: box-shadow 0.15s ease, border-color 0.15s ease;
 
-	@media (prefers-color-scheme: dark) {
-		background: rgba(35, 35, 35, 0.92);
-		border: 1px solid rgba(255, 255, 255, 0.1);
-		box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
-		color: #f0f0f0;
+	&[data-color="yellow"] { --ob-comment-color: 245, 184, 0; }
+	&[data-color="red"]    { --ob-comment-color: 255, 99, 132; }
+	&[data-color="green"]  { --ob-comment-color: 63, 174, 107; }
+
+	// Emphasized when its highlight (or the box itself) is hovered: the
+	// color-matched border brightens to solid so the user can tell — at a glance,
+	// even among other same-colored boxes — which note belongs to which highlight.
+	&.is-active {
+		border-color: rgb(var(--ob-comment-color));
+		box-shadow: 0 0 0 2px rgba(var(--ob-comment-color), 0.32), 0 6px 20px rgba(0, 0, 0, 0.12);
 	}
 
-	// Emphasized when its highlight (or the box itself) is hovered, so the
-	// user can tell which note belongs to which highlight.
-	&.is-active {
-		border-color: #895DF4;
-		box-shadow: 0 0 0 2px rgba(137, 93, 244, 0.35), 0 6px 20px rgba(0, 0, 0, 0.12);
+	// Empty (composing a brand-new comment): collapse the outer card so it's a
+	// single slim field, not a box wrapping another box. The field itself takes
+	// on the solid themed surface + color border so it stands out on the page.
+	&.is-empty {
+		background: transparent;
+		border: none;
+		box-shadow: none;
+		padding: 0;
+		backdrop-filter: none;
+		-webkit-backdrop-filter: none;
 
-		@media (prefers-color-scheme: dark) {
-			border-color: #A68AF9;
-			box-shadow: 0 0 0 2px rgba(137, 93, 244, 0.55), 0 6px 20px rgba(0, 0, 0, 0.25);
+		& > .obsidian-comment-editor.sleek-input {
+			background: rgba(var(--ob-box-bg), 0.98);
+			border: 1px solid rgba(var(--ob-comment-color), 0.5);
+			box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
 		}
 	}
 
+	// The new-comment / reply field (direct child) is hidden until the user
+	// clicks the comment box (focus) — so an unfocused thread stays compact and
+	// the reply option only appears on demand. The edit-a-note field is nested
+	// inside a comment item and is unaffected. The `.sleek-input` qualifier keeps
+	// these rules more specific than the base `.sleek-input { display: block }`,
+	// which would otherwise win on source order and keep the field always visible.
+	& > .obsidian-comment-editor.sleek-input {
+		display: none;
+	}
+	&.is-focused > .obsidian-comment-editor.sleek-input,
+	&.is-empty > .obsidian-comment-editor.sleek-input {
+		display: block;
+	}
+
+	&.is-focused .obsidian-comment-actions-inline,
+	&:hover .obsidian-comment-actions-inline {
+		opacity: 1;
+		pointer-events: auto;
+	}
+
 	.obsidian-comment-list {
+		position: relative;
 		display: flex;
 		flex-direction: column;
-		gap: 8px;
+		gap: 0;
 		margin-bottom: 8px;
+		padding-left: 16px;
+
+		// Vertical thread rail (in the highlight's color) tying the replies
+		// together as one conversation. The per-comment dots sit on it.
+		&::before {
+			content: '';
+			position: absolute;
+			left: 3px;
+			top: 8px;
+			bottom: 8px;
+			width: 2px;
+			border-radius: 2px;
+			background: rgba(var(--ob-comment-color), 0.5);
+		}
 	}
 
 	.obsidian-inline-tag {
-		color: #895DF4;
-		background: rgba(137, 93, 244, 0.12);
+		// Always on a dark themed surface, so use the lighter accent.
+		color: #A68AF9;
+		background: rgba(137, 93, 244, 0.25);
 		padding: 1px 4px;
 		border-radius: 4px;
 		font-weight: 500;
 		display: inline-block;
-		@media (prefers-color-scheme: dark) {
-			background: rgba(137, 93, 244, 0.25);
-			color: #A68AF9;
-		}
 	}
 
 	.obsidian-comment-item {
+		position: relative;
 		display: flex;
 		flex-direction: column;
-		background: rgba(0, 0, 0, 0.03);
-		padding: 6px 8px;
-		border-radius: 6px;
-		
-		@media (prefers-color-scheme: dark) {
-			background: rgba(255, 255, 255, 0.05);
+		background: transparent;
+		padding: 6px 2px 7px;
+		border-radius: 0;
+
+		// Hairline divider between replies for clear separation in a thread.
+		& + .obsidian-comment-item {
+			border-top: 1px solid var(--ob-divider);
 		}
 
 		.obsidian-comment-text {
-			font-size: 16px;
-			line-height: 1.4;
+			font-size: var(--ob-font);
+			line-height: 1.45;
+			margin-top: 3px;
 			word-break: break-word;
 			flex-grow: 1;
 
 			a {
-				color: #895DF4;
+				color: #A68AF9;
 				text-decoration: underline;
-				@media (prefers-color-scheme: dark) { color: #A68AF9; }
 			}
 			strong { font-weight: 700; }
 			em { font-style: italic; }
@@ -575,13 +690,9 @@ body {
 						position: absolute;
 						bottom: 0; left: 0; right: 0;
 						height: 24px;
-						background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, 0.9));
+						background: linear-gradient(to bottom, transparent, rgba(var(--ob-box-bg), 0.95));
 						pointer-events: none;
 						transition: opacity 0.2s ease;
-						
-						@media (prefers-color-scheme: dark) {
-							background: linear-gradient(to bottom, transparent, rgba(40, 40, 40, 0.9));
-						}
 					}
 					
 					&:hover::after {
@@ -591,57 +702,66 @@ body {
 			}
 		}
 
+		// Header line: thread dot + timestamp on the left, hover actions on the right.
 		.obsidian-comment-item-header {
+			position: relative;
 			display: flex;
-			justify-content: space-between;
-			align-items: flex-start;
-			width: 100%;
-		}
-
-		.obsidian-comment-item-footer {
-			display: flex;
-			justify-content: space-between;
 			align-items: center;
-			margin-top: 4px;
+			gap: 6px;
 			width: 100%;
-			
-			.obsidian-comment-timestamp {
-				font-size: 11px;
-				color: #777;
-				font-weight: 500;
-				
-				@media (prefers-color-scheme: dark) {
-					color: #aaa;
-				}
-			}
+			min-height: 16px;
 		}
 
+		// Dot sits on the thread rail (rail center ≈ 4px from the list's left edge;
+		// the header content starts ~18px in, so the dot is pulled left to meet the
+		// rail and vertically centered on the header line).
+		.obsidian-comment-dot {
+			position: absolute;
+			left: -18px;
+			top: 50%;
+			transform: translateY(-50%);
+			width: 9px;
+			height: 9px;
+			border-radius: 50%;
+			background: rgb(var(--ob-comment-color));
+			// Ring in the box surface color so the dot reads as sitting on the rail.
+			box-shadow: 0 0 0 2px rgba(var(--ob-box-bg), 1);
+		}
+
+		.obsidian-comment-timestamp {
+			font-size: 11px;
+			color: var(--ob-muted);
+			font-weight: 500;
+		}
+
+		// Edit/delete actions stay out of the way until the box is focused or
+		// hovered, keeping a populated thread clean.
 		.obsidian-comment-actions-inline {
 			display: flex;
 			gap: 4px;
-			
+			margin-left: auto;
+			opacity: 0;
+			pointer-events: none;
+			transition: opacity 0.12s ease;
+
 			button {
 				background: transparent;
 				border: none;
-				color: #555;
+				color: var(--ob-muted);
 				cursor: pointer;
 				padding: 2px;
 				border-radius: 4px;
 				display: flex;
 				opacity: 1;
-				
-				@media (prefers-color-scheme: dark) {
-					color: #ccc;
-				}
 
 				&:hover {
-					background: rgba(0, 0, 0, 0.1);
+					background: rgba(255, 255, 255, 0.12);
 					opacity: 1;
 				}
 			}
-			
+
 			.obsidian-comment-edit:hover {
-				color: #895DF4;
+				color: #A68AF9;
 			}
 			.obsidian-comment-delete:hover {
 				color: #ff4444;
@@ -649,79 +769,92 @@ body {
 		}
 	}
 
-	.obsidian-comment-editor {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
+	.obsidian-comment-editor.sleek-input {
+		position: relative;
+		// Slightly elevated surface over the themed box, with a subtle border so
+		// the field reads as a distinct input in every theme.
+		background: rgba(255, 255, 255, 0.06);
+		border: 1px solid rgba(255, 255, 255, 0.14);
+		border-radius: 10px;
+		// NOTE: do NOT set `display` here. This rule compiles to
+		// `.obsidian-comment-box .obsidian-comment-editor.sleek-input` (same
+		// specificity as the focus-gating rules below) and, coming later in source
+		// order, a `display` here would override them and keep the reply field
+		// always visible. A <div> is block by default, so the gating rules
+		// (`> .sleek-input { display: none }` / `.is-focused > … { display: block }`)
+		// fully control visibility — the field shows only when the box is clicked.
+
+		// The edit-a-note field sits inside a comment item with its own spacing.
+		&.is-editing { margin: 0; }
 
 		textarea {
 			width: 100%;
 			box-sizing: border-box;
-			border: 1px solid rgba(0, 0, 0, 0.2);
-			border-radius: 4px;
-			padding: 8px;
+			border: none;
+			padding: 6px 32px 6px 10px;
+			margin: 0;
 			font-family: inherit;
-			font-size: 16px;
-			resize: vertical;
+			font-size: var(--ob-font);
+			line-height: 1.4;
+			resize: none;
 			background: transparent;
 			color: inherit;
-			
-			@media (prefers-color-scheme: dark) {
-				border: 1px solid rgba(255, 255, 255, 0.2);
-			}
+			outline: none;
+			// Roughly one line of text plus padding — a single slim field that
+			// grows as the user types (autosized in JS).
+			min-height: 32px;
+			max-height: none;
+			overflow: hidden;
 
+			&::placeholder {
+				color: var(--ob-muted);
+			}
 			&:focus {
-				outline: 1px solid #895DF4;
-				border-color: #895DF4;
+				outline: none;
+				border-color: transparent;
 			}
 		}
 
-		.obsidian-comment-actions {
+		button {
+			position: absolute;
+			bottom: 4px;
+			right: 4px;
 			display: flex;
-			justify-content: flex-end;
-			gap: 8px;
+			align-items: center;
+			justify-content: center;
+			background: transparent;
+			border: none;
+			color: var(--ob-muted);
+			cursor: pointer;
+			padding: 4px;
+			border-radius: 4px;
 
-			button {
-				font-family: inherit;
-				font-size: 12px;
-				padding: 4px 12px;
-				border-radius: 4px;
-				cursor: pointer;
-				font-weight: 500;
-				border: 1px solid transparent;
+			&:hover {
+				color: var(--ob-text);
+			}
 
-				&.obsidian-comment-cancel {
-					background: transparent;
-					color: #666;
-					@media (prefers-color-scheme: dark) { color: #aaa; }
-					&:hover { background: rgba(0, 0, 0, 0.05); }
-				}
+			&.obsidian-comment-save-new svg {
+				background: rgba(255, 255, 255, 0.08);
+				color: var(--ob-muted);
+				border-radius: 50%;
+				padding: 2px;
+				width: 18px;
+				height: 18px;
+				transition: all 0.2s ease;
+			}
 
-				&.obsidian-comment-save {
-					background: #895DF4;
-					color: white;
-					&:hover { background: #A68AF9; }
-				}
+			&.obsidian-comment-delete {
+				color: var(--ob-muted);
 			}
 		}
-	}
 
-	.obsidian-comment-add-more {
-		width: 100%;
-		text-align: left;
-		background: transparent;
-		border: none;
-		color: #895DF4;
-		font-family: inherit;
-		font-size: 13px;
-		padding: 2px 0;
-		cursor: pointer;
-		opacity: 0.8;
+		&.has-text button.obsidian-comment-save-new svg {
+			background: #895DF4 !important;
+			color: #ffffff !important;
+		}
 
-		&:hover {
-			opacity: 1;
-			text-decoration: underline;
+		&.has-text button.obsidian-comment-save-new:hover svg {
+			background: #734AD9 !important;
 		}
 	}
 }
-
