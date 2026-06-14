@@ -6,9 +6,12 @@
 	--safe-area-inset-left: env(safe-area-inset-left);
 	--safe-area-inset-right: env(safe-area-inset-right);
 
-	--accent-h: 258;
-	--accent-s: 88%;
-	--accent-l: 66%;
+	// Brand purple, nudged toward periwinkle/lavender so it sits well on the
+	// blue-slate surfaces (see the dark --color-base-* ramp). Slate + violet is
+	// the Tokyo Night / Catppuccin pairing.
+	--accent-h: 248;
+	--accent-s: 85%;
+	--accent-l: 70%;
 
 	--background-primary: var(--color-base-00);
 	--background-primary-alt: var(--color-base-10);
@@ -319,20 +322,23 @@
 				calc(var(--accent-s) * 1.02),
 				calc(var(--accent-l) * 1.29));
 
-		--color-base-00: #1e1e1e;
-		--color-base-05: #212121;
-		--color-base-10: #242424;
-		--color-base-20: #262626;
-		--color-base-25: #2a2a2a;
+		// Blue-slate ramp (replaces neutral gray) — applied app-wide via the base
+		// variables: settings, popup, highlights, sidebar, menus all derive from
+		// these. Surfaces are slate; text grays carry a slight blue tint.
+		--color-base-00: #1b2030;
+		--color-base-05: #1d2334;
+		--color-base-10: #202739;
+		--color-base-20: #232a3d;
+		--color-base-25: #2c3346;
 
-		--color-base-30: #363636;
-		--color-base-35: #3f3f3f;
-		--color-base-40: #555555;
+		--color-base-30: #353d54;
+		--color-base-35: #404962;
+		--color-base-40: #4d5775;
 
-		--color-base-50: #666666;
-		--color-base-60: #999999;
-		--color-base-70: #b3b3b3;
-		--color-base-100: #dadada;
+		--color-base-50: #6b7489;
+		--color-base-60: #8b94aa;
+		--color-base-70: #aab3c8;
+		--color-base-100: #dfe5f0;
 		
 		--color-orange-rgb: 233, 151, 63;
 

@@ -544,16 +544,8 @@ function renderSidebar() {
 		const isDomainActive = currentNav.type === 'domain' && currentNav.domain === group.domain;
 		cached.li.classList.toggle('active', isDomainActive);
 		cached.countEl.textContent = String(group.totalHighlights);
-		const isExpanded = expandedSidebarDomains.has(group.domain);
-		cached.chevronWrap.classList.toggle('is-expanded', isExpanded);
 
 		domainListEl.appendChild(cached.li);
-
-		if (isExpanded) {
-			for (const pageLi of createPageSubItems(group)) {
-				domainListEl.appendChild(pageLi);
-			}
-		}
 	}
 
 	if (needsIcons) createIcons({ icons });
@@ -564,12 +556,11 @@ function createDomainNode(domain: string): CachedDomainNode {
 	li.className = 'nav-domain';
 	li.setAttribute('data-domain', domain);
 
+	// Sidebar is a flat sources list — no chevron trees. Clicking a source filters
+	// the main pane; its pages appear there as section headers, not in the sidebar.
+	// (chevronWrap kept off-DOM only to satisfy the cache shape.)
 	const chevronWrap = document.createElement('div');
 	chevronWrap.className = 'nav-chevron-wrap';
-	const chevronIcon = document.createElement('i');
-	chevronIcon.setAttribute('data-lucide', 'chevron-right');
-	chevronWrap.appendChild(chevronIcon);
-	li.appendChild(chevronWrap);
 
 	const normalized = domain.replace(/^www\./, '');
 	const domainSettings = domainSettingsMap[normalized];
@@ -610,23 +601,14 @@ function createDomainNode(domain: string): CachedDomainNode {
 	count.className = 'nav-count';
 	li.appendChild(count);
 
-	chevronWrap.addEventListener('click', (e) => {
-		e.stopPropagation();
-		toggleDomainExpand(domain);
-	});
-
 	li.addEventListener('click', (e) => {
 		if (e.ctrlKey || e.metaKey) {
 			e.preventDefault();
 			window.open(`https://${domain}`, '_blank');
 			return;
 		}
-		const isActive = currentNav.type === 'domain' && currentNav.domain === domain;
-		if (isActive) {
-			toggleDomainExpand(domain);
-		} else {
-			navigate({ type: 'domain', domain });
-		}
+		// Always filter the main pane to this source.
+		navigate({ type: 'domain', domain });
 	});
 
 	return { li, countEl: count, chevronWrap };

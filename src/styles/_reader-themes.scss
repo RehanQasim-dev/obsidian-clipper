@@ -355,15 +355,18 @@
 
 	&.theme-dark {
 		color-scheme: dark;
-		--background-primary: #1e1e1e;
-		--background-primary-alt: #212121;
-		--text-normal: #dadada;
-		--text-muted: #b3b3b3;
-		--text-faint: #666666;
-		--text-accent: #dadada;
+		// Blue-slate to match the global theme. This default dark reader theme is
+		// also applied to the highlights dashboard's content, so without this the
+		// reading column would fall back to neutral #1e1e1e black inside slate.
+		--background-primary: #1b2030;
+		--background-primary-alt: #1d2334;
+		--text-normal: #dfe5f0;
+		--text-muted: #aab3c8;
+		--text-faint: #6b7489;
+		--text-accent: #dfe5f0;
 		--text-accent-hover: #a68af9;
-		--background-modifier-border: #363636;
-		--text-selection: #3A2D53;
+		--background-modifier-border: #2c3346;
+		--text-selection: #2f3a57;
 		--shadow-s:
 			0px 1px 2px rgba(0, 0, 0, 0.121),
 			0px 3.4px 6.7px rgba(0, 0, 0, 0.179),
