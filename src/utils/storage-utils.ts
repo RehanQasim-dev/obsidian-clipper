@@ -19,6 +19,7 @@ export let generalSettings: Settings = {
 	videoNotesEnabled: true,
 	videoCaptureKey: 's',
 	videoCommentKey: 'n',
+	videoTranscriptKey: 't',
 	showMoreActionsButton: false,
 	interpreterModel: '',
 	models: [],
@@ -82,6 +83,7 @@ interface StorageData {
 		videoNotesEnabled?: boolean;
 		videoCaptureKey?: string;
 		videoCommentKey?: string;
+		videoTranscriptKey?: string;
 	};
 	reader_settings?: {
 		fontSize?: number;
@@ -141,6 +143,7 @@ export async function loadSettings(): Promise<Settings> {
 		videoNotesEnabled: true,
 		videoCaptureKey: 's',
 		videoCommentKey: 'n',
+		videoTranscriptKey: 't',
 		interpreterModel: '',
 		models: [],
 		providers: [],
@@ -209,6 +212,7 @@ export async function loadSettings(): Promise<Settings> {
 		videoNotesEnabled: data.highlighter_settings?.videoNotesEnabled ?? defaultSettings.videoNotesEnabled,
 		videoCaptureKey: data.highlighter_settings?.videoCaptureKey ?? defaultSettings.videoCaptureKey,
 		videoCommentKey: data.highlighter_settings?.videoCommentKey ?? defaultSettings.videoCommentKey,
+		videoTranscriptKey: data.highlighter_settings?.videoTranscriptKey ?? defaultSettings.videoTranscriptKey,
 		interpreterModel: data.interpreter_settings?.interpreterModel || defaultSettings.interpreterModel,
 		models: sanitizedModels,
 		providers: sanitizedProviders,
@@ -267,7 +271,8 @@ export async function saveSettings(settings?: Partial<Settings>): Promise<void> 
 			commentTextSize: generalSettings.commentTextSize,
 			videoNotesEnabled: generalSettings.videoNotesEnabled,
 			videoCaptureKey: generalSettings.videoCaptureKey,
-			videoCommentKey: generalSettings.videoCommentKey
+			videoCommentKey: generalSettings.videoCommentKey,
+			videoTranscriptKey: generalSettings.videoTranscriptKey
 		},
 		interpreter_settings: {
 			interpreterModel: generalSettings.interpreterModel,

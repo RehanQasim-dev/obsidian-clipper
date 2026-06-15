@@ -8,6 +8,7 @@ import {
 	getVideoElement, getVideoId, getVideoTitle, getPlayerContainer, isYouTubeWatchPage,
 } from './youtube-detect';
 import { captureFrame } from './frame-capture';
+import { openComments, isCommentsActive } from './video-comments';
 
 // In-page overlay for capturing + marking up a YouTube frame and attaching a
 // chat-style comment thread. Lazy-loaded by content.ts on first use, so none of
@@ -67,7 +68,7 @@ export function isAnnotatorActive(): boolean {
 // --- Public entry points -----------------------------------------------------
 
 export async function startCaptureAndDraw(): Promise<void> {
-	if (active || !isYouTubeWatchPage()) return;
+	if (active || isCommentsActive() || !isYouTubeWatchPage()) return;
 	video = getVideoElement();
 	if (!video) return;
 	prepareSession();
@@ -82,14 +83,22 @@ export async function startCaptureAndDraw(): Promise<void> {
 }
 
 export async function startCommentOnly(): Promise<void> {
-	if (active || !isYouTubeWatchPage()) return;
-	video = getVideoElement();
-	if (!video) return;
-	prepareSession();
-	item = { id: genVideoId(), kind: 'note', videoTime, notes: [] };
-	frameless = true;
-	mode = 'comment';
-	buildOverlay();
+	if (active || isCommentsActive() || !isYouTubeWatchPage()) return;
+	const v = getVideoElement();
+	if (!v) return;
+	// Comment-only (frameless) is now just the per-video conversation panel,
+	// opened on a fresh note item (written on first reply).
+	const note: VideoItem = { id: genVideoId(), kind: 'note', videoTime: v.currentTime, notes: [] };
+	await openComments({
+		watchUrl: location.href,
+		videoId: getVideoId(),
+		videoTitle: getVideoTitle(),
+		video: v,
+		wasPlaying: !v.paused,
+		focusItemId: note.id,
+		resumeOnClose: true,
+		ensureItem: note,
+	});
 }
 
 // --- Session lifecycle -------------------------------------------------------
@@ -783,19 +792,20 @@ async function persist() {
 // --- Mode transitions --------------------------------------------------------
 
 function goToComment() {
-	if (mode === 'comment' || !root) return;
-	mode = 'comment';
-	root.classList.remove('mode-draw');
-	root.classList.add('mode-comment');
-	// Drop draw-only affordances; the frame is now read-only.
-	clearLive();
-	selectedId = null;
-	frameWrap?.querySelector('.ob-vid-toolbar')?.remove();
-	frameWrap?.querySelector('.ob-vid-hint')?.remove();
-	// Re-render markup once the frame finishes its shrink animation.
-	setTimeout(() => { renderCommitted(); }, 950);
-	renderMessages();
-	focusInput();
+	if (mode === 'comment' || !root || !item) return;
+	// The frame is already persisted by the caller. Tear down the draw overlay
+	// (without resuming — the conversation panel owns playback) and hand off to
+	// the per-video conversation panel focused on this frame's thread.
+	const it = item;
+	const vid = video;
+	const playing = wasPlaying;
+	const wu = watchUrl, vid2 = videoId, vt = videoTitle;
+	teardown(true, false);
+	openComments({
+		watchUrl: wu, videoId: vid2, videoTitle: vt,
+		video: vid, wasPlaying: playing,
+		focusItemId: it.id, resumeOnClose: true,
+	});
 }
 
 // --- Keyboard ----------------------------------------------------------------
@@ -881,7 +891,7 @@ function toast(msg: string) {
 
 // `save` = whether the item (frame + thread) should remain persisted. In draw
 // mode, Esc discards (save=false) since nothing was written yet.
-function teardown(save: boolean) {
+function teardown(save: boolean, resume = true) {
 	// Defer releasing the Escape lock: if this teardown was triggered BY pressing
 	// Escape, unlocking immediately would let that same Escape press (the browser
 	// evaluates fullscreen-exit on keyup, after our keydown handler) also exit
@@ -907,7 +917,7 @@ function teardown(save: boolean) {
 	root = frameWrap = frameInner = committedHolder = panel = msgsEl = null;
 	frameImg = null; inputEl = null; liveSvg = null;
 
-	const resume = wasPlaying;
+	const doResume = resume && wasPlaying;
 	const vid = video;
 	active = false;
 	mode = 'draw';
@@ -918,5 +928,5 @@ function teardown(save: boolean) {
 	if (!save) {
 		// Nothing persisted in draw mode until Enter/C; just resume.
 	}
-	if (vid && resume) vid.play().catch(() => {});
+	if (vid && doResume) vid.play().catch(() => {});
 }

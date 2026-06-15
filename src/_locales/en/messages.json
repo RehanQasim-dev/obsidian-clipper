@@ -146,6 +146,12 @@
 	"videoCommentKeyDescription": {
 		"message": "Single key to add a timestamped comment without capturing a frame."
 	},
+	"videoTranscriptKey": {
+		"message": "Transcript annotation key"
+	},
+	"videoTranscriptKeyDescription": {
+		"message": "Single key to open the transcript panel and highlight the spoken lines."
+	},
 	"clipBehaviorDescription": {
 		"message": "Choose how highlighted content is saved to Obsidian. Defines the $strong_start${{content}}$strong_end$ variable.",
 		"placeholders": {

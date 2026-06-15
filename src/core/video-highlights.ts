@@ -53,6 +53,26 @@ export function createVideoItemCard(
 		fig.appendChild(badge);
 
 		el.appendChild(fig);
+	} else if (item.kind === 'transcript' && item.quote) {
+		// Transcript highlight: a colored quote block + a M:SS–M:SS range badge.
+		const block = document.createElement('div');
+		block.className = 'video-transcript-card' + (item.color ? ' ' + item.color : '');
+
+		const quote = document.createElement('blockquote');
+		quote.className = 'video-transcript-quote';
+		quote.textContent = item.quote;
+		block.appendChild(quote);
+
+		const badge = document.createElement('a');
+		badge.className = 'video-time-badge';
+		badge.href = atUrl;
+		badge.target = '_blank';
+		badge.rel = 'noopener noreferrer';
+		badge.textContent = item.timeEnd != null ? `${stamp}–${formatVideoTime(item.timeEnd)}` : stamp;
+		badge.title = 'Open at this moment';
+		block.appendChild(badge);
+
+		el.appendChild(block);
 	} else {
 		// Frameless note: a quiet timestamp chip linking to the moment.
 		const chip = document.createElement('a');

@@ -20,6 +20,7 @@ export const generalSettings: Settings = {
 	videoNotesEnabled: false,
 	videoCaptureKey: 's',
 	videoCommentKey: 'n',
+	videoTranscriptKey: 't',
 	showMoreActionsButton: false,
 	interpreterModel: '',
 	models: [],

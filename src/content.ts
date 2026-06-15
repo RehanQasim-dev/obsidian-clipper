@@ -14,7 +14,9 @@ import { saveFile } from './utils/file-utils';
 import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
-import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly } from './utils/video/video-annotator';
+import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly, isAnnotatorActive } from './utils/video/video-annotator';
+import { startTranscriptAnnotate as videoTranscript, isTranscriptPanelActive } from './utils/video/video-transcript-panel';
+import { isCommentsActive } from './utils/video/video-comments';
 
 declare global {
 	interface Window {
@@ -506,6 +508,34 @@ declare global {
 	// Call updateHasHighlights when the page loads
 	window.addEventListener('load', updateHasHighlights);
 
+	// YouTube lecture-note keys (S/N/T) are intercepted in the CAPTURE phase on
+	// window so they run *before* YouTube's own document-level shortcut handlers
+	// (which would otherwise also fire — e.g. T toggling theater mode, N skipping
+	// to the next video). We stopImmediatePropagation to keep the key from
+	// reaching YouTube. When one of our panels is already open it owns the
+	// keyboard via its own capture listener, so we bow out and let it through.
+	window.addEventListener('keydown', (e) => {
+		if (!isYouTubeWatch() || generalSettings.videoNotesEnabled === false) return;
+		if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+		if (isAnnotatorActive() || isCommentsActive() || isTranscriptPanelActive()) return;
+		const target = e.target as HTMLElement;
+		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
+			|| target.isContentEditable || target.closest('.obsidian-comment-editor')) {
+			return;
+		}
+		const k = e.key.toLowerCase();
+		const capKey = (generalSettings.videoCaptureKey || 's').toLowerCase();
+		const comKey = (generalSettings.videoCommentKey || 'n').toLowerCase();
+		const transKey = (generalSettings.videoTranscriptKey || 't').toLowerCase();
+		if (k !== capKey && k !== comKey && k !== transKey) return;
+		e.preventDefault();
+		e.stopImmediatePropagation();
+		ensureHighlighterCSS();
+		if (k === capKey) videoCapture();
+		else if (k === comKey) videoCommentOnly();
+		else videoTranscript();
+	}, true);
+
 	document.addEventListener('keydown', (e) => {
 		// Ignore if typing in an input, textarea, or contenteditable
 		const target = e.target as HTMLElement;
@@ -538,28 +568,8 @@ declare global {
 			return;
 		}
 
-		// YouTube lecture notes: capture+draw (default S) / comment-only (default N).
-		// Single keys, watch-page only, no modifiers, and the input guard above keeps
-		// them from firing while typing in YouTube's search/comment fields. The
-		// annotator owns the keyboard once open (it handles Enter/C/Esc itself).
-		if (isYouTubeWatch() && generalSettings.videoNotesEnabled !== false
-			&& !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-			const k = e.key.toLowerCase();
-			const capKey = (generalSettings.videoCaptureKey || 's').toLowerCase();
-			const comKey = (generalSettings.videoCommentKey || 'n').toLowerCase();
-			if (k === capKey) {
-				e.preventDefault();
-				ensureHighlighterCSS();
-				videoCapture();
-				return;
-			}
-			if (k === comKey) {
-				e.preventDefault();
-				ensureHighlighterCSS();
-				videoCommentOnly();
-				return;
-			}
-		}
+		// YouTube lecture-note keys (S/N/T) are handled by the window-capture
+		// listener above (so they don't leak to YouTube's own shortcuts).
 
 		if (e.key === 'h' || e.key === 'H') {
 			// Highlighter and pencil are mutually exclusive (their pointer handlers

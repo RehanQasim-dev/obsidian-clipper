@@ -26,12 +26,29 @@ $ob-vid-accent: #897cf2;
 	&.is-closing { opacity: 0; transition: opacity 0.2s ease; }
 
 	.ob-vid-stage {
+		position: relative;
+		z-index: 1;
 		display: flex;
 		width: 100%;
 		height: 100%;
 		align-items: stretch;
 	}
 }
+
+// Dims the live video behind a side panel (comments / transcript). Sized to the
+// overlay, which already matches the video's content rect.
+.ob-vid-backdrop {
+	position: absolute;
+	inset: 0;
+	z-index: 0;
+	background: rgba(0, 0, 0, 0.78);
+	animation: ob-vid-fade-in 0.18s ease;
+}
+
+// During a panel switch the frame + backdrop are identical and in the same spot,
+// so suppress the open fade-in — only the right panel should appear to change.
+.ob-vid-overlay.ob-vid-noanim,
+.ob-vid-overlay.ob-vid-noanim .ob-vid-backdrop { animation: none; }
 
 // --- Frame side --------------------------------------------------------------
 
@@ -269,7 +286,7 @@ $ob-vid-accent: #897cf2;
 	border: 1px solid $ob-vid-line;
 	border-radius: 12px 12px 12px 4px;
 	padding: 8px 11px;
-	font-size: 13.5px;
+	font-size: 15.5px;
 	line-height: 1.45;
 	color: $ob-vid-text;
 	word-break: break-word;
@@ -334,4 +351,202 @@ $ob-vid-accent: #897cf2;
 	border-radius: 10px;
 	font: 13px system-ui, sans-serif;
 	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+
+// --- Transcript panel (the `T` flow) -----------------------------------------
+
+// Transcript + conversation panels are wider than the legacy chat panel.
+.ob-vid-overlay.mode-comment .ob-vt-panel,
+.ob-vid-overlay.mode-comment .ob-vidc-panel {
+	flex-basis: clamp(320px, 34vw, 460px);
+	width: clamp(320px, 34vw, 460px);
+}
+
+.ob-vt-head-left {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	min-width: 0;
+}
+
+.ob-vt-lang {
+	max-width: 150px;
+	background: $ob-vid-bg3;
+	color: $ob-vid-text;
+	border: 1px solid $ob-vid-line;
+	border-radius: 6px;
+	font-size: 12px;
+	padding: 3px 6px;
+	cursor: pointer;
+	outline: none;
+	&:focus { border-color: $ob-vid-accent; }
+	option { background: $ob-vid-bg2; color: $ob-vid-text; }
+}
+
+.ob-vt-list {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	padding: 14px 16px 20px;
+	min-height: 0;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.ob-vt-para {
+	margin: 0 0 14px;
+	font-size: 14.5px;
+	line-height: 1.7;
+	color: $ob-vid-text;
+}
+
+.ob-vt-cue {
+	&.is-now {
+		background: rgba(137, 124, 242, 0.18);
+		box-shadow: 0 0 0 1px rgba(137, 124, 242, 0.35);
+		border-radius: 3px;
+	}
+}
+
+.ob-vt-hl {
+	color: inherit;
+	border-radius: 2px;
+	padding: 0.5px 0;
+	cursor: pointer;
+	&.yellow { background: rgba(250, 204, 21, 0.42); }
+	&.red { background: rgba(251, 113, 133, 0.42); }
+	&.green { background: rgba(74, 197, 130, 0.42); }
+}
+
+// Floating selection popup (color swatches + Comment).
+.ob-vt-popup {
+	position: fixed;
+	z-index: 2147483647;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 10px;
+	background: $ob-vid-bg2;
+	border: 1px solid $ob-vid-line;
+	border-radius: 10px;
+	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+	animation: ob-vid-fade-in 0.12s ease;
+
+	.ob-vid-swatch { width: 22px; height: 22px; }
+}
+
+.ob-vt-popup-comment {
+	border: none;
+	background: $ob-vid-accent;
+	color: #fff;
+	font: 600 12.5px system-ui, sans-serif;
+	padding: 5px 10px;
+	border-radius: 7px;
+	cursor: pointer;
+	white-space: nowrap;
+	&:hover { filter: brightness(1.08); }
+}
+
+// --- Per-video conversation panel --------------------------------------------
+
+.ob-vidc-conv {
+	justify-content: flex-start; // threads top-to-bottom
+	gap: 14px;
+}
+
+.ob-vidc-empty {
+	color: $ob-vid-faint;
+	font-size: 13px;
+	text-align: center;
+	margin: auto;
+}
+
+.ob-vidc-thread {
+	border: 1px solid $ob-vid-line;
+	border-radius: 12px;
+	padding: 10px;
+	background: rgba(255, 255, 255, 0.02);
+	cursor: pointer;
+	transition: border-color 0.15s ease, background 0.15s ease;
+
+	&.is-focused {
+		cursor: default;
+		border-color: $ob-vid-accent;
+		background: rgba(137, 124, 242, 0.07);
+	}
+}
+
+.ob-vidc-anchor {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 8px;
+}
+
+.ob-vidc-thumb {
+	position: relative;
+	flex: 0 0 auto;
+	width: 96px;
+	border-radius: 6px;
+	overflow: hidden;
+	line-height: 0;
+	background: #000;
+	img { width: 100%; height: auto; display: block; }
+	.ob-vidc-thumb-markup { position: absolute; inset: 0; svg { width: 100%; height: 100%; } }
+}
+
+.ob-vidc-quote {
+	flex: 1 1 auto;
+	font-size: 13px;
+	line-height: 1.45;
+	color: $ob-vid-muted;
+	font-style: italic;
+	padding-left: 9px;
+	border-left: 3px solid $ob-vid-faint;
+	max-height: 4.4em;
+	overflow: hidden;
+	&.yellow { border-left-color: #facc15; }
+	&.red { border-left-color: #fb7185; }
+	&.green { border-left-color: #4ac582; }
+}
+
+.ob-vidc-stamp {
+	flex: 0 0 auto;
+	align-self: flex-start;
+	font-variant-numeric: tabular-nums;
+	font-size: 11.5px;
+	font-weight: 600;
+	color: $ob-vid-accent;
+	background: rgba(137, 124, 242, 0.14);
+	padding: 2px 7px;
+	border-radius: 5px;
+	cursor: pointer;
+	white-space: nowrap;
+	&:hover { background: rgba(137, 124, 242, 0.26); }
+}
+
+.ob-vidc-msgs {
+	display: flex;
+	flex-direction: column;
+	gap: 7px;
+}
+
+.ob-vidc-replywrap {
+	padding: 10px 0 2px;
+	border-top: none;
+}
+
+.ob-vidc-replyquote {
+	font-size: 12px;
+	line-height: 1.4;
+	color: $ob-vid-muted;
+	padding: 5px 9px;
+	margin-bottom: 6px;
+	background: $ob-vid-bg3;
+	border-left: 3px solid $ob-vid-faint;
+	border-radius: 0 6px 6px 0;
+	max-height: 3.2em;
+	overflow: hidden;
+	&.yellow { border-left-color: #facc15; }
+	&.red { border-left-color: #fb7185; }
+	&.green { border-left-color: #4ac582; }
 }

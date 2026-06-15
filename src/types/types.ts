@@ -87,6 +87,7 @@ export interface Settings {
 	videoNotesEnabled: boolean;
 	videoCaptureKey: string;   // single key to capture + draw (default 's')
 	videoCommentKey: string;   // single key for comment-only (default 'n')
+	videoTranscriptKey: string; // single key for transcript annotation (default 't')
 	interpreterModel?: string;
 	models: ModelConfig[];
 	providers: Provider[];

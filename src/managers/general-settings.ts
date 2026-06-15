@@ -469,6 +469,16 @@ function initializeHighlighterSettings(): void {
 			saveSettings({ ...generalSettings, videoCommentKey: k });
 		});
 	}
+
+	const transcriptKeyInput = document.getElementById('video-transcript-key') as HTMLInputElement;
+	if (transcriptKeyInput) {
+		transcriptKeyInput.value = (generalSettings.videoTranscriptKey || 't').toUpperCase();
+		transcriptKeyInput.addEventListener('change', () => {
+			const k = (transcriptKeyInput.value.trim()[0] || 't').toLowerCase();
+			transcriptKeyInput.value = k.toUpperCase();
+			saveSettings({ ...generalSettings, videoTranscriptKey: k });
+		});
+	}
 }
 
 async function initializeUsageChart(): Promise<void> {

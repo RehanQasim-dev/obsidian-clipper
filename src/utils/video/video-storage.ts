@@ -47,14 +47,27 @@ export interface VideoFrameImage {
 	h: number;
 }
 
+// Anchors a transcript highlight back onto the caption track so it can be
+// repainted when the transcript panel reopens. Caption cues are immutable per
+// video, so (cue index + char offset) is a stable anchor — no fragile XPath.
+export interface TranscriptAnchor {
+	startCue: number; startOffset: number;
+	endCue: number;   endOffset: number;
+}
+
 export interface VideoItem {
 	id: string;
-	kind: 'frame' | 'note';
-	videoTime: number;            // seconds into the video
+	kind: 'frame' | 'note' | 'transcript';
+	videoTime: number;            // seconds into the video (range START for transcript)
 	frame?: VideoFrameImage;      // present only for kind:'frame'
 	markup?: VideoMarkup;         // present only for kind:'frame' with drawings
 	notes: string[];              // chat messages; "text<!--timestamp:N--><!--edited:M-->"
 	updatedAt?: number;
+	// --- transcript-only fields ---
+	timeEnd?: number;             // end of the last covered cue (range END)
+	quote?: string;               // exact highlighted transcript text
+	color?: VideoColor;           // highlight color
+	anchor?: TranscriptAnchor;    // for repainting the highlight inline on reopen
 }
 
 export interface VideoAnnotationData {

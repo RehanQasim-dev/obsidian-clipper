@@ -727,6 +727,32 @@ h1.highlight-page-title {
 		text-decoration: none;
 	}
 
+	// Transcript highlight: a colored quote block with a range badge below.
+	.video-transcript-card {
+		--tcol: var(--text-accent);
+		&.yellow { --tcol: #d4a300; }
+		&.red { --tcol: #e0556b; }
+		&.green { --tcol: #2f9e63; }
+	}
+
+	.video-transcript-quote {
+		margin: 0;
+		padding: 6px 0 6px 12px;
+		border-inline-start: 3px solid var(--tcol);
+		color: var(--text-normal);
+		font-style: italic;
+		line-height: 1.5;
+	}
+
+	.video-transcript-card .video-time-badge {
+		position: static;
+		display: inline-block;
+		margin-top: 8px;
+		margin-inline-start: 12px;
+		color: var(--text-on-accent, #fff);
+		background: var(--tcol);
+	}
+
 	.highlight-comment-thread {
 		margin-top: 10px;
 		margin-inline-start: 2px;
