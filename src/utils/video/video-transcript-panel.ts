@@ -1,15 +1,15 @@
 import {
-	VideoItem, VideoColor, VideoFrameImage, genVideoId, upsertVideoItem, loadVideoData,
+	VideoItem, VideoColor, genVideoId, upsertVideoItem, loadVideoData,
 } from './video-storage';
 import {
-	getVideoElement, getVideoId, getVideoTitle, getPlayerContainer, isYouTubeWatchPage,
+	getVideoElement, getVideoId, getVideoTitle, isYouTubeWatchPage,
 } from './youtube-detect';
 import {
 	LoadedTranscript, TranscriptCue, loadTranscript, getSessionLang, setSessionLang,
 } from './video-transcript';
+import { formatVideoTime } from './video-notes';
 import { openComments, isCommentsActive } from './video-comments';
-import { captureFrame } from './frame-capture';
-import { buildFrameSide, buildDimBackdrop } from './video-stage';
+import { engagePlayerStage, mountHost, unmountHost, disengagePlayerStage } from './video-player-stage';
 
 // Live YouTube transcript-annotation panel (the `T` flow). Pauses the video and
 // docks a scrollable transcript on the right, auto-scrolled to a fixed 30s
@@ -34,7 +34,6 @@ let videoTime = 0;
 
 let transcript: LoadedTranscript | null = null;
 let saved: VideoItem[] = []; // existing kind:'transcript' items for this video
-let capturedFrame: VideoFrameImage | null = null;
 
 let root: HTMLElement | null = null;
 let listEl: HTMLElement | null = null;
@@ -76,8 +75,6 @@ export async function startTranscriptAnnotate(): Promise<void> {
 	}
 
 	video.pause();
-	capturedFrame = await captureFrame(video);
-	if (my !== session) return;
 	const data = await loadVideoData(watchUrl);
 	if (my !== session) return;
 	saved = data ? data.items.filter(i => i.kind === 'transcript' && i.anchor) : [];
@@ -86,40 +83,13 @@ export async function startTranscriptAnnotate(): Promise<void> {
 }
 
 // --- Layout ------------------------------------------------------------------
-
-function mountTarget(): HTMLElement {
-	return (document.fullscreenElement as HTMLElement | null) || getPlayerContainer() || document.body;
-}
-
-function positionRoot() {
-	if (!root || !video) return;
-	const el = video.getBoundingClientRect();
-	let { left, top, width: w, height: h } = el;
-	const vw = video.videoWidth, vh = video.videoHeight;
-	if (vw > 0 && vh > 0) {
-		const va = vw / vh;
-		const ea = el.width / el.height;
-		if (ea > va) { h = el.height; w = h * va; }
-		else { w = el.width; h = w / va; }
-		left = el.left + (el.width - w) / 2;
-		top = el.top + (el.height - h) / 2;
-	}
-	root.style.left = `${left}px`;
-	root.style.top = `${top}px`;
-	root.style.width = `${w}px`;
-	root.style.height = `${h}px`;
-}
+// The live player is scaled to the left by the shared player stage; this panel
+// fills the host docked on the right.
 
 function build() {
+	engagePlayerStage();
 	root = document.createElement('div');
-	root.className = 'ob-vid-overlay mode-comment ob-vt-root';
-
-	const stage = document.createElement('div');
-	stage.className = 'ob-vid-stage';
-	stage.appendChild(buildFrameSide(capturedFrame));
-
-	const panel = document.createElement('div');
-	panel.className = 'ob-vid-panel ob-vt-panel';
+	root.className = 'ob-vt-host';
 
 	const head = document.createElement('div');
 	head.className = 'ob-vid-panel-head';
@@ -145,24 +115,16 @@ function build() {
 	listEl.addEventListener('dblclick', onListDblClick);
 	listEl.addEventListener('scroll', () => removePopup());
 
-	panel.appendChild(head);
-	panel.appendChild(listEl);
-	stage.appendChild(panel);
-	root.appendChild(buildDimBackdrop());
-	root.appendChild(stage);
-	mountTarget().appendChild(root);
-	positionRoot();
+	root.appendChild(head);
+	root.appendChild(listEl);
+	mountHost(root);
 
 	renderTranscript();
 	scrollToLookback();
 
-	window.addEventListener('resize', positionRoot, true);
-	window.addEventListener('scroll', positionRoot, true);
-	document.addEventListener('fullscreenchange', onFullscreenChange, true);
 	window.addEventListener('keydown', onKeyDown, true);
 	window.addEventListener('keyup', onKeyUpShield, true);
 	window.addEventListener('keypress', onKeyUpShield, true);
-	lockEscape();
 }
 
 function buildLangPicker(): HTMLElement {
@@ -188,13 +150,6 @@ function buildLangPicker(): HTMLElement {
 	// Hide the picker when there's only one track.
 	if (transcript!.tracks.length < 2) sel.style.display = 'none';
 	return sel;
-}
-
-function onFullscreenChange() {
-	if (!root) return;
-	const target = mountTarget();
-	if (root.parentElement !== target) target.appendChild(root);
-	positionRoot();
 }
 
 // --- Transcript rendering + highlight repaint --------------------------------
@@ -238,6 +193,14 @@ function renderTranscript() {
 	for (const para of transcript.paragraphs) {
 		const p = document.createElement('p');
 		p.className = 'ob-vt-para';
+		const startSec = para.cues[0]?.start ?? 0;
+		const ts = document.createElement('button');
+		ts.type = 'button';
+		ts.className = 'ob-vt-ts';
+		ts.textContent = formatVideoTime(startSec);
+		ts.title = 'Jump to this moment';
+		ts.addEventListener('click', () => seekTo(startSec));
+		p.appendChild(ts);
 		for (const cue of para.cues) {
 			const span = document.createElement('span');
 			span.className = 'ob-vt-cue' + (cue.index === curCueIdx ? ' is-now' : '');
@@ -247,6 +210,12 @@ function renderTranscript() {
 		}
 		listEl.appendChild(p);
 	}
+}
+
+// Seek the live player (which now sits resized on the left) to a moment.
+function seekTo(seconds: number) {
+	const v = video || getVideoElement();
+	if (v) { try { v.currentTime = Math.max(0, seconds); } catch { /* ignore */ } }
 }
 
 function currentCueIndex(): number {
@@ -339,14 +308,21 @@ function showPopup(rect: DOMRect) {
 	comment.addEventListener('click', () => createHighlight('yellow', true));
 	popupEl.appendChild(comment);
 
-	mountTarget().appendChild(popupEl);
+	// Mount inside the host, which renders 1:1 with the screen in both windowed
+	// and fullscreen (the fullscreen counter-scale cancels the player scale), so
+	// host-local coordinates map straight to screen pixels.
+	if (!root) return;
+	popupEl.style.visibility = 'hidden';
+	root.appendChild(popupEl);
+	const hostRect = root.getBoundingClientRect();
 	const pr = popupEl.getBoundingClientRect();
-	let left = rect.left + rect.width / 2 - pr.width / 2;
-	let top = rect.top - pr.height - 8;
-	left = Math.max(6, Math.min(left, window.innerWidth - pr.width - 6));
-	if (top < 6) top = rect.bottom + 8;
+	let left = (rect.left + rect.width / 2 - hostRect.left) - pr.width / 2;
+	let top = (rect.top - hostRect.top) - pr.height - 8;
+	left = Math.max(6, Math.min(left, hostRect.width - pr.width - 6));
+	if (top < 4) top = (rect.bottom - hostRect.top) + 8;
 	popupEl.style.left = `${left}px`;
 	popupEl.style.top = `${top}px`;
+	popupEl.style.visibility = '';
 }
 
 function removePopup() {
@@ -391,15 +367,14 @@ function onListDblClick(e: MouseEvent) {
 async function openCommentFor(itemId: string) {
 	removePopup();
 	window.getSelection()?.removeAllRanges();
-	// Switch panels keeping the SAME frame on the left: mount the comment panel
-	// (reusing our captured frame, no fade) so it covers the transcript panel,
-	// then hide the transcript underneath. Only the right panel appears to change.
+	// Switch panels keeping the player scaled in place (the stage stays engaged):
+	// mount the comment panel so it covers the transcript panel, then hide the
+	// transcript host underneath. Only the right panel appears to change.
 	await openComments({
 		watchUrl, videoId, videoTitle, video,
 		wasPlaying: false,        // the transcript panel owns resume
 		focusItemId: itemId,
 		resumeOnClose: false,
-		frame: capturedFrame,
 		switchMode: true,
 		onClose: async () => {
 			// Refresh saved highlights (a thread may now have content) and bring the
@@ -408,7 +383,6 @@ async function openCommentFor(itemId: string) {
 			saved = data ? data.items.filter(i => i.kind === 'transcript' && i.anchor) : saved;
 			if (root) {
 				root.style.display = '';
-				positionRoot();
 				renderTranscript();
 			}
 		},
@@ -420,52 +394,36 @@ async function openCommentFor(itemId: string) {
 
 function onKeyUpShield(e: KeyboardEvent) {
 	if (!active) return;
-	if ((e.target as HTMLElement)?.closest?.('.ob-vt-panel')) e.stopPropagation();
+	// Only shield typing inside our own fields (e.g. the language picker).
+	const t = e.target as HTMLElement;
+	if (t?.tagName === 'SELECT' || t?.closest?.('.ob-vt-host .ob-vid-input')) e.stopPropagation();
 }
 
 function onKeyDown(e: KeyboardEvent) {
 	if (!active || isCommentsActive()) return;
-	// Let the conversation panel handle keys when it's open on top.
-	e.stopPropagation();
-	if (e.key === 'Escape') { e.preventDefault(); if (popupEl) removePopup(); else teardown(); }
+	// Only claim Escape; every other key flows to YouTube so its shortcuts
+	// (Space → play/pause, arrows → seek, etc.) keep working behind the panel.
+	if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (popupEl) removePopup(); else teardown(); }
 }
 
-// --- Escape lock + teardown --------------------------------------------------
-
-function lockEscape() {
-	const kb = (navigator as unknown as { keyboard?: { lock?: (k: string[]) => Promise<void> } }).keyboard;
-	if (openedFullscreen && kb?.lock) {
-		try { kb.lock(['Escape'])?.catch(() => {}); } catch { /* ignore */ }
-	}
-}
-function unlockEscape() {
-	const kb = (navigator as unknown as { keyboard?: { unlock?: () => void } }).keyboard;
-	if (kb?.unlock) { try { kb.unlock(); } catch { /* ignore */ } }
-}
+// --- Toast + teardown --------------------------------------------------------
 
 function toast(msg: string) {
 	const el = document.createElement('div');
 	el.className = 'ob-vid-toast';
 	el.textContent = msg;
-	mountTarget().appendChild(el);
+	((document.fullscreenElement as HTMLElement | null) || document.body).appendChild(el);
 	setTimeout(() => el.remove(), 2200);
 }
 
 function teardown() {
-	setTimeout(unlockEscape, 400);
-	window.removeEventListener('resize', positionRoot, true);
-	window.removeEventListener('scroll', positionRoot, true);
-	document.removeEventListener('fullscreenchange', onFullscreenChange, true);
 	window.removeEventListener('keydown', onKeyDown, true);
 	window.removeEventListener('keyup', onKeyUpShield, true);
 	window.removeEventListener('keypress', onKeyUpShield, true);
 	removePopup();
 
-	if (root) {
-		root.classList.add('is-closing');
-		const el = root;
-		setTimeout(() => el.remove(), 250);
-	}
+	if (root) unmountHost(root);
+	disengagePlayerStage();
 	root = listEl = null;
 	pendingSel = null;
 
@@ -474,7 +432,6 @@ function teardown() {
 	active = false;
 	transcript = null;
 	saved = [];
-	capturedFrame = null;
 
 	if (vid && resume) vid.play().catch(() => {});
 }

@@ -1,11 +1,10 @@
 import {
-	VideoItem, VideoFrameImage, loadVideoData, upsertVideoItem,
+	VideoItem, loadVideoData, upsertVideoItem,
 } from './video-storage';
 import { renderMarkupSvg } from './video-markup';
 import { makeVideoNote, parseVideoNote, renderNoteHtml, formatVideoTime } from './video-notes';
-import { getVideoElement, getPlayerContainer } from './youtube-detect';
-import { captureFrame } from './frame-capture';
-import { buildFrameSide, buildDimBackdrop } from './video-stage';
+import { getVideoElement } from './youtube-detect';
+import { engagePlayerStage, mountHost, unmountHost, disengagePlayerStage } from './video-player-stage';
 
 // Per-video "conversation" comment panel: a right-docked overlay listing every
 // annotation for the video (frame / note / transcript) as grouped thread cards
@@ -29,10 +28,8 @@ export interface OpenCommentsOpts {
 	// A freshly-created item (e.g. a new note/frame) not yet persisted; included
 	// in the list and written on first reply.
 	ensureItem?: VideoItem;
-	// Reuse an already-captured frame instead of grabbing a new one (lets a panel
-	// switch keep the exact same frame on the left). switchMode also drops the
-	// open fade-in so the swap reads as just the right panel changing.
-	frame?: VideoFrameImage | null;
+	// During a panel switch (transcript ↔ comment) the player is already scaled and
+	// stays put; switchMode just drops the open fade-in so only the panel changes.
 	switchMode?: boolean;
 }
 
@@ -45,7 +42,6 @@ let root: HTMLElement | null = null;
 let listEl: HTMLElement | null = null;
 let inputEl: HTMLTextAreaElement | null = null;
 let openedFullscreen = false;
-let capturedFrame: VideoFrameImage | null = null;
 
 export function isCommentsActive(): boolean {
 	return active;
@@ -66,46 +62,17 @@ export async function openComments(o: OpenCommentsOpts): Promise<void> {
 	focusId = o.focusItemId || (items.length ? items[items.length - 1].id : null);
 
 	if (o.video) o.video.pause();
-	capturedFrame = o.frame ?? (o.video ? await captureFrame(o.video) : null);
 	build();
 }
 
-// --- Layout (mirrors the annotator's video-rect positioning) -----------------
-
-function mountTarget(): HTMLElement {
-	return (document.fullscreenElement as HTMLElement | null) || getPlayerContainer() || document.body;
-}
-
-function positionRoot() {
-	if (!root) return;
-	const video = opts?.video || getVideoElement();
-	if (!video) return;
-	const el = video.getBoundingClientRect();
-	let { left, top, width: w, height: h } = el;
-	const vw = video.videoWidth, vh = video.videoHeight;
-	if (vw > 0 && vh > 0) {
-		const va = vw / vh;
-		const ea = el.width / el.height;
-		if (ea > va) { h = el.height; w = h * va; }
-		else { w = el.width; h = w / va; }
-		left = el.left + (el.width - w) / 2;
-		top = el.top + (el.height - h) / 2;
-	}
-	root.style.left = `${left}px`;
-	root.style.top = `${top}px`;
-	root.style.width = `${w}px`;
-	root.style.height = `${h}px`;
-}
+// --- Layout ------------------------------------------------------------------
+// The live player is scaled to the left by the shared player stage; this panel
+// just fills the host the stage docks on the right.
 
 function build() {
+	engagePlayerStage();
 	root = document.createElement('div');
-	root.className = 'ob-vid-overlay mode-comment ob-vidc-root' + (opts?.switchMode ? ' ob-vid-noanim' : '');
-
-	const stage = document.createElement('div');
-	stage.className = 'ob-vid-stage';
-
-	const panel = document.createElement('div');
-	panel.className = 'ob-vid-panel ob-vidc-panel';
+	root.className = 'ob-vidc-host' + (opts?.switchMode ? ' ob-vid-noanim' : '');
 
 	const head = document.createElement('div');
 	head.className = 'ob-vid-panel-head';
@@ -124,32 +91,15 @@ function build() {
 	listEl = document.createElement('div');
 	listEl.className = 'ob-vid-msgs ob-vidc-conv';
 
-	panel.appendChild(head);
-	panel.appendChild(listEl);
-
-	stage.appendChild(buildFrameSide(capturedFrame));
-	stage.appendChild(panel);
-	root.appendChild(buildDimBackdrop());
-	root.appendChild(stage);
-	mountTarget().appendChild(root);
-	positionRoot();
+	root.appendChild(head);
+	root.appendChild(listEl);
+	mountHost(root);
 
 	renderConversation();
 
-	window.addEventListener('resize', positionRoot, true);
-	window.addEventListener('scroll', positionRoot, true);
-	document.addEventListener('fullscreenchange', onFullscreenChange, true);
 	window.addEventListener('keydown', onKeyDown, true);
 	window.addEventListener('keyup', onKeyUpShield, true);
 	window.addEventListener('keypress', onKeyUpShield, true);
-	lockEscape();
-}
-
-function onFullscreenChange() {
-	if (!root) return;
-	const target = mountTarget();
-	if (root.parentElement !== target) target.appendChild(root);
-	positionRoot();
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -311,49 +261,32 @@ function onKeyDown(e: KeyboardEvent) {
 	if (!active) return;
 	const inChat = !!(e.target as HTMLElement)?.classList?.contains('ob-vid-input');
 	if (inChat) {
+		// Typing: shield everything from YouTube's shortcuts (Space, etc.).
 		e.stopPropagation();
 		if (e.key === 'Escape') { e.preventDefault(); teardown(); }
 		else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postMessage(); }
 		return;
 	}
-	e.stopPropagation();
-	if (e.key === 'Escape') { e.preventDefault(); teardown(); }
+	// Not typing: only claim Escape; let every other key reach YouTube (Space →
+	// play/pause, etc.) so its shortcuts keep working behind the panel.
+	if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); teardown(); }
 }
 
-// --- Escape lock + teardown --------------------------------------------------
-
-function lockEscape() {
-	const kb = (navigator as unknown as { keyboard?: { lock?: (k: string[]) => Promise<void> } }).keyboard;
-	if (openedFullscreen && kb?.lock) {
-		try { kb.lock(['Escape'])?.catch(() => {}); } catch { /* ignore */ }
-	}
-}
-function unlockEscape() {
-	const kb = (navigator as unknown as { keyboard?: { unlock?: () => void } }).keyboard;
-	if (kb?.unlock) { try { kb.unlock(); } catch { /* ignore */ } }
-}
+// --- Teardown ----------------------------------------------------------------
 
 function teardown() {
 	const o = opts;
-	setTimeout(unlockEscape, 400);
-	window.removeEventListener('resize', positionRoot, true);
-	window.removeEventListener('scroll', positionRoot, true);
-	document.removeEventListener('fullscreenchange', onFullscreenChange, true);
 	window.removeEventListener('keydown', onKeyDown, true);
 	window.removeEventListener('keyup', onKeyUpShield, true);
 	window.removeEventListener('keypress', onKeyUpShield, true);
 
-	if (root) {
-		root.classList.add('is-closing');
-		const el = root;
-		setTimeout(() => el.remove(), 250);
-	}
+	if (root) unmountHost(root);
+	disengagePlayerStage();
 	root = listEl = inputEl = null;
 	active = false;
 	items = [];
 	focusId = null;
 	opts = null;
-	capturedFrame = null;
 
 	if (o?.resumeOnClose && o.wasPlaying && o.video) o.video.play().catch(() => {});
 	o?.onClose?.();

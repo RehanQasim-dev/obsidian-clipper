@@ -353,6 +353,53 @@ $ob-vid-accent: #897cf2;
 	box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
 
+// --- Side-panel host + dim (live-player stage) -------------------------------
+// The panel container the player stage docks on the right of the resized live
+// player. Positioned/sized (and counter-scaled in fullscreen) inline by JS.
+.ob-vps-host {
+	box-sizing: border-box;
+	font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	color: $ob-vid-text;
+	background: $ob-vid-bg;
+	border-left: 1px solid $ob-vid-line;
+	box-shadow: -10px 0 36px rgba(0, 0, 0, 0.5);
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	animation: ob-vid-fade-in 0.18s ease;
+
+	*, *::before, *::after { box-sizing: border-box; }
+	&.ob-vid-noanim { animation: none; }
+}
+
+// Dims only the original player box around the resized player (windowed only —
+// fullscreen already has the browser's black backdrop). Sized + clip-path hole
+// set in JS. pointer-events:none keeps the live player clickable.
+.ob-vps-dim {
+	position: fixed;
+	z-index: 2147483639;
+	background: rgba(0, 0, 0, 0.82);
+	pointer-events: none;
+}
+
+// Per-paragraph timestamp chip in the transcript — clicking it seeks the live
+// player. Kept separate from the cue text so selecting lines still works.
+.ob-vt-ts {
+	display: inline-block;
+	margin-right: 8px;
+	padding: 1px 6px;
+	border: none;
+	border-radius: 5px;
+	background: rgba(137, 124, 242, 0.16);
+	color: $ob-vid-accent;
+	font: 600 11.5px system-ui, sans-serif;
+	font-variant-numeric: tabular-nums;
+	cursor: pointer;
+	vertical-align: baseline;
+	user-select: none;
+	&:hover { background: rgba(137, 124, 242, 0.3); }
+}
+
 // --- Transcript panel (the `T` flow) -----------------------------------------
 
 // Transcript + conversation panels are wider than the legacy chat panel.
@@ -417,9 +464,10 @@ $ob-vid-accent: #897cf2;
 	&.green { background: rgba(74, 197, 130, 0.42); }
 }
 
-// Floating selection popup (color swatches + Comment).
+// Floating selection popup (color swatches + Comment). Positioned within the
+// host (which is 1:1 with the screen), so absolute coordinates map directly.
 .ob-vt-popup {
-	position: fixed;
+	position: absolute;
 	z-index: 2147483647;
 	display: flex;
 	align-items: center;

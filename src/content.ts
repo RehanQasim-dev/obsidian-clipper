@@ -511,13 +511,14 @@ declare global {
 	// YouTube lecture-note keys (S/N/T) are intercepted in the CAPTURE phase on
 	// window so they run *before* YouTube's own document-level shortcut handlers
 	// (which would otherwise also fire — e.g. T toggling theater mode, N skipping
-	// to the next video). We stopImmediatePropagation to keep the key from
-	// reaching YouTube. When one of our panels is already open it owns the
-	// keyboard via its own capture listener, so we bow out and let it through.
+	// to the next video). We always stopImmediatePropagation so these keys never
+	// reach YouTube on a watch page — even when one of our panels is already open
+	// (so e.g. T can't toggle theater behind the panel); in that case we just
+	// suppress and don't reopen. Other keys are left alone, so YouTube's own
+	// shortcuts (Space, arrows, …) keep working behind an open panel.
 	window.addEventListener('keydown', (e) => {
 		if (!isYouTubeWatch() || generalSettings.videoNotesEnabled === false) return;
 		if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
-		if (isAnnotatorActive() || isCommentsActive() || isTranscriptPanelActive()) return;
 		const target = e.target as HTMLElement;
 		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA'
 			|| target.isContentEditable || target.closest('.obsidian-comment-editor')) {
@@ -530,6 +531,8 @@ declare global {
 		if (k !== capKey && k !== comKey && k !== transKey) return;
 		e.preventDefault();
 		e.stopImmediatePropagation();
+		// A panel already owns the screen → just suppress the key, don't reopen.
+		if (isAnnotatorActive() || isCommentsActive() || isTranscriptPanelActive()) return;
 		ensureHighlighterCSS();
 		if (k === capKey) videoCapture();
 		else if (k === comKey) videoCommentOnly();
