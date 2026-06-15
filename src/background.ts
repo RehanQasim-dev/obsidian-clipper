@@ -435,6 +435,21 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 
 		// fetchProxy is handled by a separate listener below
 
+		// Screenshot the visible tab — fallback for capturing a YouTube frame when
+		// the <video> can't be drawn to a canvas directly (tainted). The content
+		// script crops the returned image to the player's rect.
+		if (typedRequest.action === "captureVisibleTab") {
+			const windowId = sender.tab?.windowId;
+			const opts = { format: 'jpeg' as const, quality: 92 };
+			const capture = windowId != null
+				? browser.tabs.captureVisibleTab(windowId, opts)
+				: browser.tabs.captureVisibleTab(opts as any);
+			Promise.resolve(capture)
+				.then((dataUrl: string) => sendResponse({ dataUrl }))
+				.catch((err: unknown) => sendResponse({ error: err instanceof Error ? err.message : String(err) }));
+			return true;
+		}
+
 		if (typedRequest.action === "extractContent" && sender.tab && sender.tab.id) {
 			browser.tabs.sendMessage(sender.tab.id, request).then(sendResponse);
 			return true;

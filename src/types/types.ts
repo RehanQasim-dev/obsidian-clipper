@@ -83,6 +83,10 @@ export interface Settings {
 	// On-page comment box appearance.
 	commentTheme: 'slate' | 'charcoal' | 'oled' | 'warm';
 	commentTextSize: 'small' | 'default' | 'large';
+	// YouTube video frame annotation (lecture notes).
+	videoNotesEnabled: boolean;
+	videoCaptureKey: string;   // single key to capture + draw (default 's')
+	videoCommentKey: string;   // single key for comment-only (default 'n')
 	interpreterModel?: string;
 	models: ModelConfig[];
 	providers: Provider[];

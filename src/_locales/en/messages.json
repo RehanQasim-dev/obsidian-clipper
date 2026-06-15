@@ -128,6 +128,24 @@
 	"commentTextSizeLarge": {
 		"message": "Large"
 	},
+	"videoNotesEnabled": {
+		"message": "YouTube video notes"
+	},
+	"videoNotesEnabledDescription": {
+		"message": "On a YouTube watch page, capture the current frame to draw on and comment, or add a timestamped comment. Uses the capture/comment keys below."
+	},
+	"videoCaptureKey": {
+		"message": "Capture & draw key"
+	},
+	"videoCaptureKeyDescription": {
+		"message": "Single key (on a YouTube watch page) to capture the frame and start drawing."
+	},
+	"videoCommentKey": {
+		"message": "Comment-only key"
+	},
+	"videoCommentKeyDescription": {
+		"message": "Single key to add a timestamped comment without capturing a frame."
+	},
 	"clipBehaviorDescription": {
 		"message": "Choose how highlighted content is saved to Obsidian. Defines the $strong_start${{content}}$strong_end$ variable.",
 		"placeholders": {

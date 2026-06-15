@@ -443,6 +443,32 @@ function initializeHighlighterSettings(): void {
 			saveSettings({ ...generalSettings, commentTextSize: commentTextSizeSelect.value as Settings['commentTextSize'] });
 		});
 	}
+
+	initializeSettingToggle('video-notes-enabled', generalSettings.videoNotesEnabled, (checked) => {
+		saveSettings({ ...generalSettings, videoNotesEnabled: checked });
+	});
+
+	// Single-key inputs for the YouTube capture/comment shortcuts. Stored lowercase;
+	// blank input falls back to the default.
+	const captureKeyInput = document.getElementById('video-capture-key') as HTMLInputElement;
+	if (captureKeyInput) {
+		captureKeyInput.value = (generalSettings.videoCaptureKey || 's').toUpperCase();
+		captureKeyInput.addEventListener('change', () => {
+			const k = (captureKeyInput.value.trim()[0] || 's').toLowerCase();
+			captureKeyInput.value = k.toUpperCase();
+			saveSettings({ ...generalSettings, videoCaptureKey: k });
+		});
+	}
+
+	const commentKeyInput = document.getElementById('video-comment-key') as HTMLInputElement;
+	if (commentKeyInput) {
+		commentKeyInput.value = (generalSettings.videoCommentKey || 'n').toUpperCase();
+		commentKeyInput.addEventListener('change', () => {
+			const k = (commentKeyInput.value.trim()[0] || 'n').toLowerCase();
+			commentKeyInput.value = k.toUpperCase();
+			saveSettings({ ...generalSettings, videoCommentKey: k });
+		});
+	}
 }
 
 async function initializeUsageChart(): Promise<void> {

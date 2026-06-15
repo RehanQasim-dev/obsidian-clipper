@@ -13,6 +13,7 @@
 		"contextMenus",
 		"sidePanel",
 		"storage",
+		"unlimitedStorage",
 		"scripting",
 		"declarativeNetRequest",
 		"identity",

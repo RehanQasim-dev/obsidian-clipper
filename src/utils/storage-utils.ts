@@ -16,6 +16,9 @@ export let generalSettings: Settings = {
 	highlightBehavior: 'highlight-inline',
 	commentTheme: 'slate',
 	commentTextSize: 'default',
+	videoNotesEnabled: true,
+	videoCaptureKey: 's',
+	videoCommentKey: 'n',
 	showMoreActionsButton: false,
 	interpreterModel: '',
 	models: [],
@@ -76,6 +79,9 @@ interface StorageData {
 		highlightBehavior?: string;
 		commentTheme?: 'slate' | 'charcoal' | 'oled' | 'warm';
 		commentTextSize?: 'small' | 'default' | 'large';
+		videoNotesEnabled?: boolean;
+		videoCaptureKey?: string;
+		videoCommentKey?: string;
 	};
 	reader_settings?: {
 		fontSize?: number;
@@ -132,6 +138,9 @@ export async function loadSettings(): Promise<Settings> {
 		highlightBehavior: 'highlight-inline',
 		commentTheme: 'slate',
 		commentTextSize: 'default',
+		videoNotesEnabled: true,
+		videoCaptureKey: 's',
+		videoCommentKey: 'n',
 		interpreterModel: '',
 		models: [],
 		providers: [],
@@ -197,6 +206,9 @@ export async function loadSettings(): Promise<Settings> {
 		highlightBehavior: data.highlighter_settings?.highlightBehavior ?? defaultSettings.highlightBehavior,
 		commentTheme: data.highlighter_settings?.commentTheme ?? defaultSettings.commentTheme,
 		commentTextSize: data.highlighter_settings?.commentTextSize ?? defaultSettings.commentTextSize,
+		videoNotesEnabled: data.highlighter_settings?.videoNotesEnabled ?? defaultSettings.videoNotesEnabled,
+		videoCaptureKey: data.highlighter_settings?.videoCaptureKey ?? defaultSettings.videoCaptureKey,
+		videoCommentKey: data.highlighter_settings?.videoCommentKey ?? defaultSettings.videoCommentKey,
 		interpreterModel: data.interpreter_settings?.interpreterModel || defaultSettings.interpreterModel,
 		models: sanitizedModels,
 		providers: sanitizedProviders,
@@ -252,7 +264,10 @@ export async function saveSettings(settings?: Partial<Settings>): Promise<void> 
 			alwaysShowHighlights: generalSettings.alwaysShowHighlights,
 			highlightBehavior: generalSettings.highlightBehavior,
 			commentTheme: generalSettings.commentTheme,
-			commentTextSize: generalSettings.commentTextSize
+			commentTextSize: generalSettings.commentTextSize,
+			videoNotesEnabled: generalSettings.videoNotesEnabled,
+			videoCaptureKey: generalSettings.videoCaptureKey,
+			videoCommentKey: generalSettings.videoCommentKey
 		},
 		interpreter_settings: {
 			interpreterModel: generalSettings.interpreterModel,

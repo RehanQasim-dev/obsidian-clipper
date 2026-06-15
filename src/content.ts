@@ -14,6 +14,7 @@ import { saveFile } from './utils/file-utils';
 import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
+import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly } from './utils/video/video-annotator';
 
 declare global {
 	interface Window {
@@ -35,6 +36,13 @@ declare global {
 	let isHighlighterMode = false;
 	const iframeId = 'obsidian-clipper-iframe';
 	const containerId = 'obsidian-clipper-container';
+
+	// Cheap inline check (no video-module import) so non-YouTube pages stay light.
+	function isYouTubeWatch(): boolean {
+		const h = location.hostname;
+		return (h === 'www.youtube.com' || h === 'youtube.com' || h === 'm.youtube.com')
+			&& location.pathname === '/watch';
+	}
 
 	function removeContainer(container: HTMLElement) {
 		container.classList.add('is-closing');
@@ -528,6 +536,29 @@ declare global {
 				undoLast();
 			}
 			return;
+		}
+
+		// YouTube lecture notes: capture+draw (default S) / comment-only (default N).
+		// Single keys, watch-page only, no modifiers, and the input guard above keeps
+		// them from firing while typing in YouTube's search/comment fields. The
+		// annotator owns the keyboard once open (it handles Enter/C/Esc itself).
+		if (isYouTubeWatch() && generalSettings.videoNotesEnabled !== false
+			&& !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+			const k = e.key.toLowerCase();
+			const capKey = (generalSettings.videoCaptureKey || 's').toLowerCase();
+			const comKey = (generalSettings.videoCommentKey || 'n').toLowerCase();
+			if (k === capKey) {
+				e.preventDefault();
+				ensureHighlighterCSS();
+				videoCapture();
+				return;
+			}
+			if (k === comKey) {
+				e.preventDefault();
+				ensureHighlighterCSS();
+				videoCommentOnly();
+				return;
+			}
 		}
 
 		if (e.key === 'h' || e.key === 'H') {

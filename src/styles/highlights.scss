@@ -581,6 +581,7 @@ h1.highlight-page-title {
 	padding: 0;
 	border: none;
 	background: transparent;
+	min-width: 0;
 }
 
 .highlight-item-note {
@@ -588,7 +589,12 @@ h1.highlight-page-title {
 	font-size: 0.9em;
 	color: var(--text-muted);
 	line-height: 1.55;
+	// Wrap long comments to the column width instead of forcing a horizontal
+	// scroll; break long unbroken strings (e.g. URLs) too.
 	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+	min-width: 0;
 }
 
 // A thread reads as quiet indented margin-notes — replies simply stacked with
@@ -599,6 +605,7 @@ h1.highlight-page-title {
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
+	min-width: 0; // let children wrap instead of overflowing the column
 
 	.highlight-item-time {
 		margin-bottom: 2px !important;
@@ -664,6 +671,65 @@ h1.highlight-page-title {
 
 	&.is-copied {
 		color: var(--color-green, var(--interactive-accent));
+	}
+}
+
+// --- Video annotation items (YouTube lecture notes) ---
+// A captured frame with its markup repainted on top, or a frameless timestamped
+// note, plus the chat thread. Tuned to sit in the centered reading column.
+
+.video-item {
+	.video-frame-card {
+		position: relative;
+		border-radius: 10px;
+		overflow: hidden;
+		background: #000;
+		line-height: 0;
+		box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+	}
+
+	.video-frame-img {
+		display: block;
+		width: 100%;
+		height: auto;
+	}
+
+	// Markup SVG stretches with the frame (its viewBox matches the frame's pixels).
+	.video-frame-overlay {
+		position: absolute;
+		inset: 0;
+		pointer-events: none;
+		svg { display: block; width: 100%; height: 100%; }
+	}
+
+	.video-time-badge {
+		position: absolute;
+		left: 8px;
+		bottom: 8px;
+		font: 600 12px/1 var(--font-default);
+		font-variant-numeric: tabular-nums;
+		color: #fff;
+		background: rgba(0, 0, 0, 0.7);
+		padding: 4px 7px;
+		border-radius: 6px;
+		text-decoration: none;
+		@media (hover: hover) { &:hover { background: rgba(0, 0, 0, 0.88); } }
+	}
+
+	.video-note-stamp {
+		display: inline-block;
+		font: 600 12px/1 var(--font-default);
+		font-variant-numeric: tabular-nums;
+		color: var(--text-accent);
+		background: hsla(var(--color-accent-hsl), 0.14);
+		padding: 4px 9px;
+		border-radius: 6px;
+		text-decoration: none;
+	}
+
+	.highlight-comment-thread {
+		margin-top: 10px;
+		margin-inline-start: 2px;
 	}
 }
 

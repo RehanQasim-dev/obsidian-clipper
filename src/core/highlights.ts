@@ -12,8 +12,15 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { createIcons } from 'lucide';
 import { icons } from '../icons/icons';
 import { initializeMenu } from '../managers/menu';
+import { loadAllVideoData, removeVideoItem, VideoItem } from '../utils/video/video-storage';
+import { createVideoItemCard } from './video-highlights';
 
 dayjs.extend(relativeTime);
+
+// A video annotation item is carried through the dashboard's HighlightEntry model
+// by stashing it on the entry data under this key; createHighlightItem routes any
+// entry carrying it to the video card renderer.
+interface VideoCarrier { __video?: VideoItem }
 
 interface DomainGroup {
 	domain: string;
@@ -133,7 +140,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 	// Listen for storage changes
 	browser.storage.onChanged.addListener((changes, area) => {
-		if (area === 'local' && changes.highlights) {
+		if (area === 'local' && (changes.highlights || changes.video_annotations)) {
 			loadData().then(() => {
 				if (!updateSidebarCounts()) {
 					renderSidebar();
@@ -285,6 +292,10 @@ async function loadData() {
 			totalHighlights: pages.reduce((sum, p) => sum + p.highlights.length, 0),
 		}));
 
+	// Fold in YouTube video annotations as their own per-video page groups so they
+	// flow through the same sidebar/timeline/render pipeline as web highlights.
+	await mergeVideoIntoGroups();
+
 	// If current nav references something that no longer exists, reset
 	const nav = currentNav;
 	if (nav.type === 'domain') {
@@ -296,6 +307,35 @@ async function loadData() {
 		if (!group || !group.pages.find(p => p.url === nav.url)) {
 			currentNav = { type: 'all' };
 		}
+	}
+}
+
+// Load YouTube video annotations and append each video as its own page group
+// (under its domain) so they render through the existing pipeline. Each video
+// item becomes a HighlightEntry carrying the VideoItem for the card renderer.
+async function mergeVideoIntoGroups(): Promise<void> {
+	const all = await loadAllVideoData();
+	const byDomain = new Map<string, PageGroup[]>();
+	for (const [url, data] of Object.entries(all)) {
+		if (!data.items || data.items.length === 0) continue;
+		let domain = 'youtube.com';
+		try { domain = new URL(url).hostname.replace(/^www\./, ''); } catch { /* keep default */ }
+		const highlights: HighlightEntry[] = data.items.map(item => ({
+			url,
+			data: {
+				type: 'text', id: item.id, xpath: '', startOffset: 0, endOffset: 0,
+				content: '', notes: item.notes, __video: item,
+			} as unknown as AnyHighlightData,
+		}));
+		const pg: PageGroup = { url, path: '/watch', title: data.title, highlights };
+		if (!byDomain.has(domain)) byDomain.set(domain, []);
+		byDomain.get(domain)!.push(pg);
+	}
+	for (const [domain, pages] of byDomain) {
+		let g = allDomainGroups.find(x => x.domain === domain);
+		if (!g) { g = { domain, pages: [], totalHighlights: 0 }; allDomainGroups.push(g); }
+		g.pages.push(...pages);
+		g.totalHighlights += pages.reduce((s, p) => s + p.highlights.length, 0);
 	}
 }
 
@@ -1238,6 +1278,14 @@ function unitKey(entries: HighlightEntry[]): string {
 }
 
 function createHighlightItem(entries: HighlightEntry[], pageUrl: string): HTMLElement {
+	// Route video annotation entries to their dedicated card renderer.
+	const carrier = entries[0]?.data as unknown as VideoCarrier;
+	if (carrier?.__video) {
+		return createVideoItemCard(carrier.__video, pageUrl, async (vid) => {
+			await removeVideoItem(pageUrl, vid.id);
+		});
+	}
+
 	const item = document.createElement('div');
 	item.className = 'highlight-item';
 	item.setAttribute('data-unit-key', unitKey(entries));
