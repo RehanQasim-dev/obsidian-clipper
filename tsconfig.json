@@ -14,7 +14,6 @@
 		"skipLibCheck": true,
 		"forceConsistentCasingInFileNames": true,
 		"outDir": "./dist",
-		"rootDir": "./src",
 		"sourceMap": true,
 		"typeRoots": ["./node_modules/@types", "./src/types"],
 		"moduleResolution": "node",

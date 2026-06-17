@@ -14,12 +14,15 @@ import browser from './browser-polyfill';
 
 const CONFIG_KEY = 'obsidian_rest_config';
 
+export type ClipTheme = 'cards' | 'document';
+
 export interface ObsidianRestConfig {
 	enabled: boolean;
 	baseUrl: string; // e.g. http://127.0.0.1:27123
 	apiKey: string;
 	folder: string; // vault base folder for clipped notes, e.g. "Clippings"
-	cssPushed?: boolean; // whether the highlight-color snippet has been written
+	theme: ClipTheme; // note styling theme
+	cssVersion?: number; // version of the CSS snippet last written to the vault
 }
 
 export const DEFAULT_CONFIG: ObsidianRestConfig = {
@@ -27,7 +30,8 @@ export const DEFAULT_CONFIG: ObsidianRestConfig = {
 	baseUrl: 'http://127.0.0.1:27123',
 	apiKey: '',
 	folder: 'Clippings',
-	cssPushed: false,
+	theme: 'cards',
+	cssVersion: 0,
 };
 
 export async function getConfig(): Promise<ObsidianRestConfig> {

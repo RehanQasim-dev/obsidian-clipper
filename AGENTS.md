@@ -54,6 +54,11 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   shifts and XPath breaks, the highlight silently drops. *(known fragility — candidate for improvement)*
 - **Comments** stored inline in `notes[]` as strings tagged with creation/edit timestamps, which act
   as stable IDs for sync merge.
+- **Portable anchor** (`anchor?`): in addition to XPath, each highlight now carries a cross-surface
+  anchor (`shared/anchor.ts`) — a universal **text-quote** (`quote` + prefix/suffix context +
+  occurrence) plus an optional **structural** anchor tagged with the `surface` ('web' | 'obsidian') it
+  was captured on. Stamped at creation (surface 'web') and backfilled for old highlights. Lets a
+  highlight be re-found on the rendered Obsidian note, not just the live DOM. See §5.
 - `groupId` links multi-block highlights (one selection spanning blocks → one highlight per block).
 - `color` ∈ {yellow, red, green}. `updatedAt` drives sync conflict resolution.
 
@@ -180,13 +185,16 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - **One note per page/video** at `<folder>/<hostname>/<title>.md` (stable per-URL path map; hash suffix on
   collision). Our content is wrapped in a `%% clipper:start/end %%` **managed region** so re-syncs never
   clobber the user's own edits; frontmatter (`source`, `domain`, `type`, `captured`, `tags`) is written on create.
-- **Format:** each annotation is a node separated by `---`. Highlights → `> [!quote]` callout with the source
-  text in `<mark class="hl-{color}">` (a `.obsidian/snippets/clipper-highlights.css` snippet, pushed once,
-  maps the classes to colors); comments → nested `> [!note]-` callout. **Image** (element) highlights embed
-  the image by resolved remote URL at a capped width (`![alt|480](src)`) rather than dumping `<img>` HTML.
-  YouTube items render in video-time
-  order with `M:SS` deep links (`&t=Ns`); frames embed `![[youtube-<videoId>-<itemId>.jpg]]` and the JPEG is
-  PUT to `<folder>/Attachments/`.
+- **Format:** each annotation is a **semantic callout** carrying its highlight color as callout metadata —
+  `clip-hl` (text), `clip-img` (image), `clip-transcript`, `clip-frame`, `clip-note`, with comments as a
+  nested `clip-reply` callout. Body is real Markdown (callouts/embeds/`<mark>`) so Obsidian features keep
+  working. **Image** highlights embed the resolved remote URL at a capped width (`![alt|480](src)`); YouTube
+  items render in video-time order with `M:SS` deep links (`&t=Ns`), frames embed `![[youtube-<videoId>-<itemId>.jpg|480]]`
+  with the JPEG PUT to `<folder>/Attachments/`.
+- **Themes:** a selectable note style (`cards` = cards + side-by-side media/comments; `document` = minimal
+  typographic). The same body renders both ways — frontmatter `cssclasses: [clip, clip-<theme>]` picks the
+  theme and a versioned CSS snippet (`obsidian-export.CLIP_CSS`, pushed to `.obsidian/snippets/`) does the
+  styling (mono metadata, accent-by-color, the flex split). Switch theme + "Sync all now" to restyle.
 - **Triggers:** live on change (per-page/video changes enqueue their URL; ~3 s debounced flush — short so it
   fires before the MV3 service worker idles out, which would otherwise drop the timer) + a manual
   **"Sync all now"** button. **Offline-safe:** if Obsidian/the plugin is unreachable the queue is kept and
@@ -222,3 +230,42 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   `window.__obsidianHighlighter`. Don't instantiate a second copy.
 - Sync conflict resolution depends on `updatedAt` being stamped on change — keep stamping it.
 - After changes, rebuild for the target browser (webpack) and reload the unpacked extension.
+
+---
+
+## 5. Cross-surface anchoring & the Obsidian companion plugin
+
+A separate **Obsidian plugin** (`obsidian-sample-plugin/`, id `clipper-annotations`, esbuild →
+`main.js`) lets you highlight/comment on clipped **source notes in reading view**, with a docked,
+linked comments panel — the same swatch popup, colors, and in-context keys (`1`/`2`/`3`, `c`, `Esc`)
+as the live-page highlighter, but comments live in a separate panel. It is a **distinct codebase**;
+the extension and plugin share logic only through a neutral top-level **`shared/`** folder (neither
+imports the other's `src/`).
+
+- **`shared/anchor.ts`** — the dual anchor model (text-quote + per-surface XPath) and the resolver
+  (XPath-when-native → text-quote fallback → "unplaced", never silently dropped). Operates on a
+  `RangeLike`; pure + unit-tested (`shared/anchor.test.ts`).
+- **`shared/merge.ts`** — the pure 3-way `clipper-sync.json` merge (newest-wins, tombstones, comment
+  merge), unit-tested (`shared/merge.test.ts`). **Both** the extension's `sync-engine.ts` and the
+  plugin's `sync.ts` import these merge functions, so there is a single implementation of the
+  conflict-resolution logic (`sync-engine.ts` keeps only its orchestrator, storage types, and
+  frame-stripping; the structurally-identical storage types stay declared locally).
+- **Full page source → Obsidian (once):** the extension captures the readable page as Markdown
+  (`page-source-capture.ts`, Defuddle) on first save and stores it under `page_sources`; the Obsidian
+  sync writes it below the managed region on note creation (immutable; re-syncs never touch it), so
+  the plugin has content to render and re-anchor against.
+- **Bidirectional Drive sync:** the plugin is a second client of the same Drive `clipper-sync.json`
+  via Google's **device-authorization OAuth** flow (`drive.ts`, no redirect/server, works on mobile);
+  `sync.ts` maps annotations ↔ the highlight shape, merges via `shared/merge`, and passes the
+  extension's drawings/video (and unrenderable highlights) through untouched so nothing is lost.
+
+- **Live-page painting of cross-surface highlights:** the painter (`renderTextHighlight`) resolves a
+  text highlight's range with the native xpath+offset path for web-origin highlights, then **falls
+  back to `resolveAnchor(anchor, document.body, 'web')`** (text-quote) when that fails — which is what
+  makes a highlight *created in Obsidian* (no web xpath) actually paint on the live page, and also
+  rescues web highlights whose page shifted. `applyHighlights` no longer gates text highlights on the
+  xpath resolving.
+
+**Remaining runtime-only check:** the plugin's Drive device-flow OAuth (`drive.ts`) is correct by
+construction but unverified end-to-end (needs a "TV/Limited Input" Google client + the Obsidian
+runtime).

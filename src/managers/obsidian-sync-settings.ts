@@ -9,6 +9,7 @@ interface ObsidianConfig {
 	baseUrl: string;
 	apiKey: string;
 	folder: string;
+	theme: 'cards' | 'document';
 }
 interface ObsidianStatus {
 	enabled: boolean;
@@ -41,10 +42,11 @@ export async function initializeObsidianSyncSettings(): Promise<void> {
 	const baseUrlEl = document.getElementById('obsidian-sync-baseurl') as HTMLInputElement | null;
 	const apiKeyEl = document.getElementById('obsidian-sync-apikey') as HTMLInputElement | null;
 	const folderEl = document.getElementById('obsidian-sync-folder') as HTMLInputElement | null;
+	const themeEl = document.getElementById('obsidian-sync-theme') as HTMLSelectElement | null;
 	const testBtn = document.getElementById('obsidian-sync-test-btn') as HTMLButtonElement | null;
 	const syncAllBtn = document.getElementById('obsidian-sync-all-btn') as HTMLButtonElement | null;
 	const statusEl = document.getElementById('obsidian-sync-status');
-	if (!enabledEl || !baseUrlEl || !apiKeyEl || !folderEl || !testBtn || !syncAllBtn || !statusEl) return;
+	if (!enabledEl || !baseUrlEl || !apiKeyEl || !folderEl || !themeEl || !testBtn || !syncAllBtn || !statusEl) return;
 
 	function renderStatus(res: ObsidianResponse): void {
 		if (res.test) {
@@ -67,6 +69,7 @@ export async function initializeObsidianSyncSettings(): Promise<void> {
 		baseUrlEl!.value = cfg.baseUrl;
 		apiKeyEl!.value = cfg.apiKey;
 		folderEl!.value = cfg.folder;
+		themeEl!.value = cfg.theme || 'cards';
 	}
 
 	async function saveConfig(): Promise<void> {
@@ -76,12 +79,14 @@ export async function initializeObsidianSyncSettings(): Promise<void> {
 				baseUrl: baseUrlEl!.value.trim(),
 				apiKey: apiKeyEl!.value.trim(),
 				folder: folderEl!.value.trim() || 'Clippings',
+				theme: (themeEl!.value === 'document' ? 'document' : 'cards'),
 			},
 		});
 		renderStatus(res);
 	}
 
 	enabledEl.addEventListener('change', saveConfig);
+	themeEl.addEventListener('change', saveConfig);
 	for (const el of [baseUrlEl, apiKeyEl, folderEl]) el.addEventListener('change', saveConfig);
 
 	testBtn.addEventListener('click', async () => {

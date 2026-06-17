@@ -17,6 +17,7 @@ import { throttle } from './throttle';
 import { getElementByXPath, isDarkColor, setElementHTML } from './dom-utils';
 import { getMessage } from './i18n';
 import { debugLog } from './debug';
+import { resolveAnchor, type AnnotationAnchor } from '../../shared/anchor';
 
 let touchStartX: number = 0;
 let touchStartY: number = 0;
@@ -111,19 +112,19 @@ function findTextNodeAtOffset(element: Element, offset: number): { node: Node, o
 	return null;
 }
 
-export function renderTextHighlight(highlight: { id: string; xpath: string; startOffset: number; endOffset: number; color?: string }): void {
+export function renderTextHighlight(highlight: {
+	id: string;
+	xpath: string;
+	startOffset: number;
+	endOffset: number;
+	color?: string;
+	anchor?: AnnotationAnchor;
+}): void {
 	const hl = ensureUserHighlight(highlight.color || 'yellow');
 	if (!hl) return;
-	const container = getElementByXPath(highlight.xpath);
-	if (!container) return;
-	const start = findTextNodeAtOffset(container, highlight.startOffset);
-	const end = findTextNodeAtOffset(container, highlight.endOffset);
-	if (!start || !end) return;
 	try {
-		const range = document.createRange();
-		range.setStart(start.node, start.offset);
-		range.setEnd(end.node, end.offset);
-		if (range.collapsed) return;
+		const range = resolveTextHighlightRange(highlight);
+		if (!range || range.collapsed) return;
 		hl.add(range);
 		const existing = textHighlightRanges.get(highlight.id);
 		if (existing) existing.push(range);
@@ -131,6 +132,47 @@ export function renderTextHighlight(highlight: { id: string; xpath: string; star
 	} catch (e) {
 		console.warn('Failed to build Range for text highlight', highlight.id, e);
 	}
+}
+
+// Resolve where a text highlight paints on the *live page*. Web-origin highlights
+// use the fast native xpath+offset path (unchanged behavior). When that fails —
+// the page shifted, or the highlight was made in Obsidian (its xpath is for the
+// note's DOM, not this page) — fall back to the portable text-quote anchor, which
+// finds the same words regardless of structure. This is what makes a highlight
+// created in Obsidian actually appear on the real web page.
+function resolveTextHighlightRange(highlight: {
+	xpath: string;
+	startOffset: number;
+	endOffset: number;
+	anchor?: AnnotationAnchor;
+}): Range | null {
+	const anchor = highlight.anchor;
+	// Native path only for web-origin highlights (no anchor = legacy web highlight).
+	const webNative = !anchor || anchor.structural?.surface === 'web';
+	if (webNative) {
+		const container = getElementByXPath(highlight.xpath);
+		if (container) {
+			const start = findTextNodeAtOffset(container, highlight.startOffset);
+			const end = findTextNodeAtOffset(container, highlight.endOffset);
+			if (start && end) {
+				const range = document.createRange();
+				range.setStart(start.node, start.offset);
+				range.setEnd(end.node, end.offset);
+				if (!range.collapsed) return range;
+			}
+		}
+	}
+	// Text-quote fallback: works across surfaces and rescues broken xpaths.
+	if (anchor) {
+		const rl = resolveAnchor(anchor, document.body, 'web');
+		if (rl) {
+			const range = document.createRange();
+			range.setStart(rl.startContainer, rl.startOffset);
+			range.setEnd(rl.endContainer, rl.endOffset);
+			if (!range.collapsed) return range;
+		}
+	}
+	return null;
 }
 
 export function clearTextHighlights(): void {

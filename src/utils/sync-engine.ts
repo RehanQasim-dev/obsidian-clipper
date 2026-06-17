@@ -9,6 +9,15 @@ import {
 	createBinaryFile,
 	downloadBinaryFile,
 } from './google-drive';
+// The 3-way merge logic is shared verbatim with the Obsidian plugin so both
+// reconcile clipper-sync.json identically. Types stay declared locally (they are
+// structurally identical to shared/merge's) to avoid touching the orchestrator.
+import {
+	emptyTombstones,
+	mergeHighlightsStorage,
+	mergeDrawingsStorage,
+	mergeVideoStorage,
+} from '../../shared/merge';
 
 // Three-way sync of annotation data to a single JSON file in Google Drive's
 // appDataFolder. Runs in the background service worker.
@@ -29,7 +38,6 @@ import {
 
 const SNAPSHOT_KEY = 'sync_snapshot';
 const STATUS_KEY = 'sync_status';
-const TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // --- Types (structurally compatible with the live storage shapes) ------------
 
@@ -105,291 +113,6 @@ export interface SyncStatus {
 	lastSyncedAt?: number;
 	lastError?: string;
 	syncing?: boolean;
-}
-
-function emptyTombstones(): Tombstones {
-	return { highlights: {}, drawings: {}, comments: {}, videoItems: {} };
-}
-
-// --- Comment marker parsing (no DOM; mirrors comment-overlays.parseNoteString) -
-
-function commentId(note: string): string {
-	const m = note.match(/<!--timestamp:(\d+)-->/);
-	return m ? m[1] : note; // fall back to raw text as id for legacy notes
-}
-function commentVersion(note: string): number {
-	const ed = note.match(/<!--edited:(\d+)-->/);
-	if (ed) return parseInt(ed[1], 10);
-	const ts = note.match(/<!--timestamp:(\d+)-->/);
-	return ts ? parseInt(ts[1], 10) : 0;
-}
-
-// --- Generic keyed 3-way merge -----------------------------------------------
-
-interface MergeResult<T> {
-	kept: Map<string, T>;
-	tombs: Record<string, number>;
-}
-
-function mergeKeyed<T>(
-	base: Map<string, T>,
-	local: Map<string, T>,
-	remote: Map<string, T>,
-	inTombs: Record<string, number>,
-	versionOf: (t: T) => number,
-	combine: (l: T, r: T) => T,
-	now: number,
-): MergeResult<T> {
-	const kept = new Map<string, T>();
-	const tombs: Record<string, number> = { ...inTombs };
-	const ids = new Set<string>([
-		...base.keys(),
-		...local.keys(),
-		...remote.keys(),
-		...Object.keys(inTombs),
-	]);
-
-	for (const id of ids) {
-		const b = base.get(id);
-		const l = local.get(id);
-		const r = remote.get(id);
-		const tomb = tombs[id];
-
-		if (l && r) {
-			// Present on both sides — pick the newer, merging where combine does so.
-			const merged = combine(l, r);
-			if (tomb !== undefined && versionOf(merged) <= tomb) {
-				// Deleted more recently than this edit — stays deleted.
-			} else {
-				kept.set(id, merged);
-				delete tombs[id];
-			}
-		} else if (l && !r) {
-			if (tomb !== undefined) {
-				if (versionOf(l) > tomb) {
-					kept.set(id, l); // re-edited locally after a remote delete → resurrect
-					delete tombs[id];
-				}
-				// else: respect the tombstone
-			} else if (!b) {
-				kept.set(id, l); // brand-new local entity
-			} else {
-				// Was in base, gone from remote, no tombstone → remote deleted it.
-				tombs[id] = now;
-			}
-		} else if (r && !l) {
-			if (b) {
-				// Was in base, gone locally → local deleted it. Record/refresh tombstone.
-				tombs[id] = now;
-			} else if (tomb !== undefined) {
-				if (versionOf(r) > tomb) {
-					kept.set(id, r); // re-added remotely after a delete → resurrect
-					delete tombs[id];
-				}
-			} else {
-				kept.set(id, r); // brand-new remote entity
-			}
-		}
-		// else: absent both sides — leave any tombstone for GC below.
-	}
-
-	// GC old tombstones so the file doesn't grow forever.
-	for (const id of Object.keys(tombs)) {
-		if (now - tombs[id] > TOMBSTONE_RETENTION_MS) delete tombs[id];
-	}
-
-	return { kept, tombs };
-}
-
-function byId<T extends { id: string }>(arr: T[] | undefined): Map<string, T> {
-	const m = new Map<string, T>();
-	for (const e of arr || []) m.set(e.id, e);
-	return m;
-}
-
-// --- Comment (notes[]) merge -------------------------------------------------
-
-function mergeNotes(
-	baseNotes: string[] | undefined,
-	localNotes: string[] | undefined,
-	remoteNotes: string[] | undefined,
-	commentTombs: Record<string, number>,
-	highlightId: string,
-	now: number,
-): string[] {
-	const toMap = (notes: string[] | undefined) => {
-		const m = new Map<string, string>();
-		for (const n of notes || []) m.set(commentId(n), n);
-		return m;
-	};
-	const base = toMap(baseNotes);
-	const local = toMap(localNotes);
-	const remote = toMap(remoteNotes);
-
-	// Scope the global comment tombstone map to this highlight.
-	const scoped: Record<string, number> = {};
-	const prefix = `${highlightId}:`;
-	for (const k of Object.keys(commentTombs)) {
-		if (k.startsWith(prefix)) scoped[k.slice(prefix.length)] = commentTombs[k];
-	}
-
-	const { kept, tombs } = mergeKeyed<string>(
-		base,
-		local,
-		remote,
-		scoped,
-		commentVersion,
-		// Same comment edited on both sides → keep the most recent edit.
-		(l, r) => (commentVersion(l) >= commentVersion(r) ? l : r),
-		now,
-	);
-
-	// Write scoped comment tombstones back into the global map.
-	for (const k of Object.keys(scoped)) delete commentTombs[prefix + k];
-	for (const k of Object.keys(tombs)) commentTombs[prefix + k] = tombs[k];
-
-	// Preserve a stable order: by creation timestamp (the comment id).
-	return [...kept.values()].sort((a, b) => parseInt(commentId(a)) - parseInt(commentId(b)));
-}
-
-// --- Highlight & drawing merge ----------------------------------------------
-
-function highlightVersion(h: Highlight): number {
-	return h.updatedAt || parseInt(h.id, 10) || 0;
-}
-
-function mergeHighlightsStorage(
-	base: HighlightsStorage,
-	local: HighlightsStorage,
-	remote: HighlightsStorage,
-	tombs: Tombstones,
-	now: number,
-): HighlightsStorage {
-	const out: HighlightsStorage = {};
-	const urls = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
-
-	for (const url of urls) {
-		const bMap = byId(base[url]?.highlights);
-		const lMap = byId(local[url]?.highlights);
-		const rMap = byId(remote[url]?.highlights);
-
-		const combine = (l: Highlight, r: Highlight): Highlight => {
-			const newer = highlightVersion(l) >= highlightVersion(r) ? l : r;
-			const notes = mergeNotes(
-				bMap.get(l.id)?.notes,
-				l.notes,
-				r.notes,
-				tombs.comments,
-				l.id,
-				now,
-			);
-			return { ...newer, notes };
-		};
-
-		const { kept, tombs: hlTombs } = mergeKeyed(
-			bMap,
-			lMap,
-			rMap,
-			tombs.highlights,
-			highlightVersion,
-			combine,
-			now,
-		);
-		tombs.highlights = hlTombs;
-
-		if (kept.size > 0) {
-			const title = local[url]?.title ?? remote[url]?.title ?? base[url]?.title;
-			out[url] = {
-				url,
-				...(title ? { title } : {}),
-				highlights: [...kept.values()],
-			};
-		}
-	}
-	return out;
-}
-
-function mergeDrawingsStorage(
-	base: DrawingsStorage,
-	local: DrawingsStorage,
-	remote: DrawingsStorage,
-	tombs: Tombstones,
-	now: number,
-): DrawingsStorage {
-	const out: DrawingsStorage = {};
-	const urls = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
-
-	for (const url of urls) {
-		const { kept, tombs: strokeTombs } = mergeKeyed(
-			byId(base[url]?.strokes),
-			byId(local[url]?.strokes),
-			byId(remote[url]?.strokes),
-			tombs.drawings,
-			(s: Stroke) => s.updatedAt || 0,
-			(l, r) => ((l.updatedAt || 0) >= (r.updatedAt || 0) ? l : r),
-			now,
-		);
-		tombs.drawings = strokeTombs;
-		if (kept.size > 0) {
-			out[url] = { url, strokes: [...kept.values()] };
-		}
-	}
-	return out;
-}
-
-// --- Video annotation merge --------------------------------------------------
-
-function videoItemVersion(it: VideoItem): number {
-	return it.updatedAt || parseInt(it.id, 10) || 0;
-}
-
-function mergeVideoStorage(
-	base: VideoStorage,
-	local: VideoStorage,
-	remote: VideoStorage,
-	tombs: Tombstones,
-	now: number,
-): VideoStorage {
-	const out: VideoStorage = {};
-	const urls = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
-
-	for (const url of urls) {
-		const bMap = byId(base[url]?.items);
-		const lMap = byId(local[url]?.items);
-		const rMap = byId(remote[url]?.items);
-
-		const combine = (l: VideoItem, r: VideoItem): VideoItem => {
-			const newer = videoItemVersion(l) >= videoItemVersion(r) ? l : r;
-			const notes = mergeNotes(bMap.get(l.id)?.notes, l.notes, r.notes, tombs.comments, l.id, now);
-			// Keep whichever side carries a frame blob id, so a frame uploaded on one
-			// device isn't lost when the other device (which only has metadata) wins on time.
-			const frame = newer.frame || l.frame || r.frame;
-			return { ...newer, notes, ...(frame ? { frame } : {}) };
-		};
-
-		const { kept, tombs: itTombs } = mergeKeyed(
-			bMap,
-			lMap,
-			rMap,
-			tombs.videoItems,
-			videoItemVersion,
-			combine,
-			now,
-		);
-		tombs.videoItems = itTombs;
-
-		if (kept.size > 0) {
-			const videoId = local[url]?.videoId ?? remote[url]?.videoId ?? base[url]?.videoId;
-			const title = local[url]?.title ?? remote[url]?.title ?? base[url]?.title;
-			out[url] = {
-				url,
-				...(videoId ? { videoId } : {}),
-				...(title ? { title } : {}),
-				items: [...kept.values()],
-			};
-		}
-	}
-	return out;
 }
 
 // Strip local-only frame image data so it never enters the merge/upload payload.
@@ -497,59 +220,82 @@ async function doSync(interactive: boolean): Promise<void> {
 			}
 		}
 
-		// Load remote (or start a fresh file).
-		const fileMeta = await findSyncFile(interactive);
-		let remote: SyncFile = {
-			version: 1,
-			highlights: {},
-			drawings: {},
-			videoAnnotations: {},
-			tombstones: emptyTombstones(),
-		};
-		if (fileMeta) {
-			try {
-				const parsed = JSON.parse(await downloadSyncFile(fileMeta.id, interactive));
-				remote = {
-					version: 1,
-					highlights: parsed.highlights || {},
-					drawings: parsed.drawings || {},
-					videoAnnotations: parsed.videoAnnotations || {},
-					tombstones: { ...emptyTombstones(), ...(parsed.tombstones || {}) },
-				};
-			} catch {
-				// Corrupt remote — treat as empty; this reconcile will rewrite it.
+		// Reconcile against Drive with compare-and-swap: load remote, 3-way merge,
+		// and upload ONLY if the remote revision hasn't moved since we downloaded
+		// it; if another client wrote in between, re-download and re-merge. This
+		// prevents one client's push from silently clobbering another's edits.
+		let mergedHighlights: HighlightsStorage = {};
+		let mergedDrawings: DrawingsStorage = {};
+		let mergedVideo: VideoStorage = {};
+		for (let attempt = 0; ; attempt++) {
+			const fileMeta = await findSyncFile(interactive);
+			let remote: SyncFile = {
+				version: 1,
+				highlights: {},
+				drawings: {},
+				videoAnnotations: {},
+				tombstones: emptyTombstones(),
+			};
+			if (fileMeta) {
+				try {
+					const parsed = JSON.parse(await downloadSyncFile(fileMeta.id, interactive));
+					remote = {
+						version: 1,
+						highlights: parsed.highlights || {},
+						drawings: parsed.drawings || {},
+						videoAnnotations: parsed.videoAnnotations || {},
+						tombstones: { ...emptyTombstones(), ...(parsed.tombstones || {}) },
+					};
+				} catch {
+					// Corrupt remote — treat as empty; this reconcile will rewrite it.
+				}
 			}
+
+			const tombs: Tombstones = {
+				highlights: { ...remote.tombstones.highlights },
+				drawings: { ...remote.tombstones.drawings },
+				comments: { ...remote.tombstones.comments },
+				videoItems: { ...remote.tombstones.videoItems },
+			};
+
+			mergedHighlights = mergeHighlightsStorage(snapshot.highlights, local.highlights, remote.highlights, tombs, now);
+			mergedDrawings = mergeDrawingsStorage(snapshot.drawings, local.drawings, remote.drawings, tombs, now);
+			// Merge on frame-image-free copies so JPEG data never enters the payload.
+			mergedVideo = mergeVideoStorage(
+				stripFrames(snapshot.videoAnnotations),
+				stripFrames(localVideo),
+				stripFrames(remote.videoAnnotations),
+				tombs,
+				now,
+			);
+
+			const mergedFile: SyncFile = {
+				version: 1,
+				highlights: mergedHighlights,
+				drawings: mergedDrawings,
+				videoAnnotations: mergedVideo,
+				tombstones: tombs,
+			};
+			const mergedJson = JSON.stringify(mergedFile);
+			const remoteJson = JSON.stringify({
+				version: 1,
+				highlights: remote.highlights,
+				drawings: remote.drawings,
+				videoAnnotations: remote.videoAnnotations,
+				tombstones: remote.tombstones,
+			});
+
+			if (!fileMeta) {
+				await createSyncFile(mergedJson, interactive);
+				break;
+			}
+			if (mergedJson === remoteJson) break; // nothing to upload
+			// CAS guard: bail to a retry if the remote moved since our download.
+			const fresh = await findSyncFile(interactive);
+			if (fresh && fresh.headRevisionId !== fileMeta.headRevisionId && attempt < 3) continue;
+			await updateSyncFile(fileMeta.id, mergedJson, interactive);
+			break;
 		}
-
-		const tombs: Tombstones = {
-			highlights: { ...remote.tombstones.highlights },
-			drawings: { ...remote.tombstones.drawings },
-			comments: { ...remote.tombstones.comments },
-			videoItems: { ...remote.tombstones.videoItems },
-		};
-
-		const mergedHighlights = mergeHighlightsStorage(
-			snapshot.highlights,
-			local.highlights,
-			remote.highlights,
-			tombs,
-			now,
-		);
-		const mergedDrawings = mergeDrawingsStorage(
-			snapshot.drawings,
-			local.drawings,
-			remote.drawings,
-			tombs,
-			now,
-		);
-		// Merge on frame-image-free copies so JPEG data never enters the payload.
-		const mergedVideo = mergeVideoStorage(
-			stripFrames(snapshot.videoAnnotations),
-			stripFrames(localVideo),
-			stripFrames(remote.videoAnnotations),
-			tombs,
-			now,
-		);
 
 		// Re-attach frame images for local storage: prefer the image we already had,
 		// otherwise lazily download the blob referenced by a remote-originated frame.
@@ -594,28 +340,6 @@ async function doSync(interactive: boolean): Promise<void> {
 		};
 		localWrite[SNAPSHOT_KEY] = newSnapshot;
 		await browser.storage.local.set(localWrite);
-
-		// Upload only if the merged file differs from what's on Drive.
-		const mergedFile: SyncFile = {
-			version: 1,
-			highlights: mergedHighlights,
-			drawings: mergedDrawings,
-			videoAnnotations: mergedVideo,
-			tombstones: tombs,
-		};
-		const mergedJson = JSON.stringify(mergedFile);
-		const remoteJson = JSON.stringify({
-			version: 1,
-			highlights: remote.highlights,
-			drawings: remote.drawings,
-			videoAnnotations: remote.videoAnnotations,
-			tombstones: remote.tombstones,
-		});
-		if (!fileMeta) {
-			await createSyncFile(mergedJson, interactive);
-		} else if (mergedJson !== remoteJson) {
-			await updateSyncFile(fileMeta.id, mergedJson, interactive);
-		}
 
 		await setStatus({ connected: true, syncing: false, lastSyncedAt: now, lastError: undefined });
 	} catch (err) {

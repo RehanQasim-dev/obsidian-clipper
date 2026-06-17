@@ -1,5 +1,7 @@
 import browser from './browser-polyfill';
 import { getElementXPath, getElementByXPath, setElementHTML } from './dom-utils';
+import { createAnchor, locateRange, type AnnotationAnchor } from '../../shared/anchor';
+import { capturePageSourceIfNeeded } from './page-source-capture';
 import {
 	handleMouseUp,
 	planHighlightOverlayRects,
@@ -67,34 +69,11 @@ function createSVG(config: {
 
 export type AnyHighlightData = TextHighlightData | ElementHighlightData;
 
-const EPHEMERAL_PARAMS = new Set([
-	't',           // YouTube timestamp
-	'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', // UTM tracking
-	'ref', 'source', 'src',   // Referral
-	'fbclid', 'gclid', 'dclid', 'msclkid', 'twclid', // Ad click IDs
-	'mc_cid', 'mc_eid',       // Mailchimp
-	'_ga', '_gl',             // Google Analytics
-	'si',                     // YouTube share tracking
-]);
-
-export function normalizeUrl(url: string): string {
-	try {
-		const parsed = new URL(url);
-		// Strip fragment identifiers — highlights on /page#section should
-		// match /page (fixes #652).
-		parsed.hash = '';
-		const params = new URLSearchParams(parsed.search);
-		for (const key of [...params.keys()]) {
-			if (EPHEMERAL_PARAMS.has(key)) {
-				params.delete(key);
-			}
-		}
-		parsed.search = params.toString();
-		return parsed.toString();
-	} catch {
-		return url;
-	}
-}
+// normalizeUrl lives in the dependency-light url-utils so background-only code can
+// use it without importing this (DOM-heavy) module. Re-exported here so existing
+// `import { normalizeUrl } from './highlighter'` consumers keep working.
+import { normalizeUrl } from './url-utils';
+export { normalizeUrl };
 
 export let highlights: AnyHighlightData[] = [];
 export let isApplyingHighlights = false;
@@ -216,6 +195,12 @@ export interface HighlightData {
 	// the persisted copy. Used by the Google Drive sync engine for last-write-wins
 	// conflict resolution; optional so pre-sync stored data stays valid.
 	updatedAt?: number;
+	// Portable cross-surface anchor (text-quote + per-surface xpath) shared with
+	// the Obsidian plugin via shared/anchor.ts, so a highlight made on the live
+	// page can be re-found in the rendered Markdown note and vice-versa. Computed
+	// at creation (surface:'web') and backfilled for pre-existing data. Optional:
+	// the extension still paints from `xpath`, so a missing anchor is harmless.
+	anchor?: AnnotationAnchor;
 }
 
 export interface TextHighlightData extends HighlightData {
@@ -559,6 +544,28 @@ function enableLinkClicks() {
 // Click-to-highlight a block element (figure, picture, img, table, pre).
 // Text-containing blocks (paragraphs, headings, etc.) are not highlightable
 // by click — those go through selection → TextHighlightData instead.
+// Compute the shared cross-surface anchor for a live-page range, tagged
+// surface:'web'. Best-effort — returns undefined when the text can't be anchored
+// (e.g. an image with no text), leaving the xpath-based highlight intact.
+function webAnchorForRange(range: { startContainer: Node; startOffset: number; endContainer: Node; endOffset: number }): AnnotationAnchor | undefined {
+	try {
+		return createAnchor(range, document.body, 'web') ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// Same, for a whole element (element highlights): anchor its text content.
+function webAnchorForElement(element: Element): AnnotationAnchor | undefined {
+	try {
+		const range = document.createRange();
+		range.selectNodeContents(element);
+		return createAnchor(range, document.body, 'web') ?? undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function highlightElement(element: Element, notes?: string[]): string | undefined {
 	if (!BLOCK_HIGHLIGHT_TAGS.has(element.tagName.toUpperCase())) return undefined;
 	const id = Date.now().toString();
@@ -568,6 +575,7 @@ export function highlightElement(element: Element, notes?: string[]): string | u
 		type: 'element',
 		id,
 		color: currentHighlightColor,
+		anchor: webAnchorForElement(element),
 	}, notes);
 	markHighlightJustCreated();
 	return id;
@@ -672,6 +680,7 @@ function getHighlightRanges(range: Range): AnyHighlightData[] {
 			content: element.outerHTML,
 			type: 'element',
 			id: `${timestamp}_el_${i}`,
+			anchor: webAnchorForElement(element),
 		});
 	}
 
@@ -750,6 +759,7 @@ function getHighlightRanges(range: Range): AnyHighlightData[] {
 				id: `${timestamp}_tx_${i}`,
 				startOffset: getTextOffset(blockElement, blockRange.startContainer, blockRange.startOffset),
 				endOffset: getTextOffset(blockElement, blockRange.endContainer, blockRange.endOffset),
+				anchor: webAnchorForRange(blockRange),
 			});
 		} catch (e) {
 			console.warn('Error creating text highlight for block:', blockElement, e);
@@ -1029,6 +1039,9 @@ export function saveHighlights() {
 	const url = normalizeUrl(rawUrl);
 	if (highlights.length > 0) {
 		const title = pageTitle || document.title || undefined;
+		// Capture the full page as Markdown once, so the Obsidian note can carry
+		// the source content the plugin re-anchors against. Fire-and-forget.
+		void capturePageSourceIfNeeded(url, title);
 		browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
 			const allHighlights: HighlightsStorage = result.highlights || {};
 			// Stamp updatedAt on highlights whose own fields changed vs. what's
@@ -1085,6 +1098,13 @@ export function applyHighlights() {
 	removeExistingHighlights();
 
 	highlights.forEach((highlight) => {
+		// Text highlights resolve their own range (native xpath → text-quote
+		// fallback), so they must not be gated on the xpath resolving — that
+		// fallback is what paints highlights made in Obsidian / on shifted pages.
+		if (highlight.type === 'text') {
+			planHighlightOverlayRects(document.body, highlight);
+			return;
+		}
 		const container = getElementByXPath(highlight.xpath);
 		if (container) {
 			planHighlightOverlayRects(container, highlight);
@@ -1274,8 +1294,31 @@ function migrateStoredHighlights(): boolean {
 				}
 			}
 		}
+
+		// 3. Backfill the portable cross-surface anchor for highlights saved
+		//    before it existed, so they too can round-trip to the Obsidian note.
+		if (!h.anchor) {
+			const anchor = backfillWebAnchor(h);
+			if (anchor) {
+				h.anchor = anchor;
+				changed = true;
+			}
+		}
 	}
 	return changed;
+}
+
+// Reconstruct a surface:'web' anchor for a stored highlight from its xpath +
+// offsets (text) or element contents (element). Best-effort and side-effect free.
+function backfillWebAnchor(h: AnyHighlightData): AnnotationAnchor | undefined {
+	const el = getElementByXPath(h.xpath);
+	if (!el) return undefined;
+	if (h.type === 'text') {
+		const range = locateRange(el, h.startOffset, h.endOffset);
+		if (!range) return undefined;
+		return webAnchorForRange(range);
+	}
+	return webAnchorForElement(el);
 }
 
 export function clearHighlights() {
