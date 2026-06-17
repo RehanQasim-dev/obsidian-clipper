@@ -182,10 +182,10 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - Transport: the **Local REST API** community plugin over its **insecure HTTP server** (`http://127.0.0.1:27123`)
   — the HTTPS server's self-signed cert can't be validated by an extension `fetch`. User enables that
   server, pastes the API key + base folder in Settings → Sync → Obsidian sync.
-- **One note per page/video** at `<folder>/<hostname>/<title>.md` (stable per-URL path map; hash suffix on
-  collision). Our content is wrapped in a `%% clipper:start/end %%` **managed region** so re-syncs never
-  clobber the user's own edits; frontmatter (`source`, `domain`, `type`, `captured`, `tags`) is written on create.
-- **Format:** each annotation is a **semantic callout** carrying its highlight color as callout metadata —
+- **Two notes per page/video** at `<folder>/<hostname>/`:
+  1. **Source note** (`<title>.md`): The immutable page text the plugin renders and anchors against. It carries the `source:` URL frontmatter and NO callouts. Written once.
+  2. **Comments note** (`<title>.comments.md`): A human-readable mirror of the annotations. Our content is wrapped in a `%% clipper:start/end %%` **managed region** so re-syncs never clobber the user's own edits; frontmatter (`clip_source`, `domain`, `type`, `captured`, `tags`) is written on create. Regenerated every sync.
+- **Format:** each annotation in the comments note is a **semantic callout** carrying its highlight color as callout metadata —
   `clip-hl` (text), `clip-img` (image), `clip-transcript`, `clip-frame`, `clip-note`, with comments as a
   nested `clip-reply` callout. Body is real Markdown (callouts/embeds/`<mark>`) so Obsidian features keep
   working. **Image** highlights embed the resolved remote URL at a capped width (`![alt|480](src)`); YouTube
@@ -266,6 +266,6 @@ imports the other's `src/`).
   rescues web highlights whose page shifted. `applyHighlights` no longer gates text highlights on the
   xpath resolving.
 
-**Remaining runtime-only check:** the plugin's Drive device-flow OAuth (`drive.ts`) is correct by
-construction but unverified end-to-end (needs a "TV/Limited Input" Google client + the Obsidian
-runtime).
+**Remaining caveats & checks:**
+- The plugin's Drive device-flow OAuth (`drive.ts`) is correct by construction but unverified end-to-end (needs a "TV/Limited Input" Google client + the Obsidian runtime).
+- **Vault Gitignore:** For the plugin to work without the extension being open, it acts as a standalone Drive client. This means it stores its own Google login refresh token in `.../.obsidian/plugins/clipper-annotations/data.json` inside the user's vault. If the user uses `obsidian-git` or otherwise version-controls their vault, they **must** add that `data.json` file to their vault's `.gitignore` so the token never gets committed.
