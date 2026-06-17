@@ -24,3 +24,7 @@ assets/shared
 .cursorrules
 .env
 context/
+
+# Obsidian plugin data
+data.json
+
