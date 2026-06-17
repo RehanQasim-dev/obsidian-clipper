@@ -7,6 +7,14 @@ import { Settings } from './types/types';
 import { debugLog } from './utils/debug';
 import { sync as syncToDrive, getStatus as getSyncStatus, resetSyncState } from './utils/sync-engine';
 import { connect as connectDrive, disconnect as disconnectDrive, getRedirectUrl, isConfigured as isSyncConfigured } from './utils/google-drive';
+import {
+	markDirty as obsidianMarkDirty,
+	enqueueAll as obsidianEnqueueAll,
+	flush as obsidianFlush,
+	getStatus as getObsidianStatus,
+	testConnection as obsidianTestConnection,
+} from './utils/obsidian-sync';
+import { getConfig as getObsidianConfig, setConfig as setObsidianConfig } from './utils/obsidian-rest';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
 const YOUTUBE_INNERTUBE_RULE_ID = 9002;
@@ -344,37 +352,104 @@ const debouncedSyncPush = debounce(() => {
 	syncToDrive(false).catch(err => console.warn('Drive sync push failed:', err));
 }, 4000);
 
+// --- Obsidian (Local REST API) sync -----------------------------------------
+// Live on change: enqueue each edited page/video and flush (debounced) to Obsidian.
+// When Obsidian is offline the queue is kept and retried on the alarm + startup.
+
+// Short debounce: collapses a burst of edits into one write, yet still fires well
+// before the MV3 service worker idles out (~30s) — a longer timer would be dropped
+// when the worker is terminated, delaying the flush until the next wake event.
+const debouncedObsidianFlush = debounce(() => {
+	obsidianFlush().catch(err => console.warn('Obsidian sync flush failed:', err));
+}, 3000);
+
+// Which top-level URL keys changed between the old and new value of a store.
+function changedUrlKeys(change?: browser.Storage.StorageChange): string[] {
+	if (!change) return [];
+	const oldV = (change.oldValue as Record<string, unknown>) || {};
+	const newV = (change.newValue as Record<string, unknown>) || {};
+	const keys = new Set([...Object.keys(oldV), ...Object.keys(newV)]);
+	const out: string[] = [];
+	for (const k of keys) {
+		if (JSON.stringify(oldV[k]) !== JSON.stringify(newV[k])) out.push(k);
+	}
+	return out;
+}
+
 // Annotation edits land in storage.local under these keys. Ignore our own
 // bookkeeping keys (snapshot/status/token) to avoid a feedback loop.
 browser.storage.onChanged.addListener((changes, area) => {
 	if (area !== 'local') return;
-	if (!isSyncConfigured()) return;
-	if (changes.highlights || changes.drawings) {
+	if (isSyncConfigured() && (changes.highlights || changes.drawings || changes.video_annotations)) {
 		debouncedSyncPush();
+	}
+	// Obsidian: drawings aren't rendered into notes, so only highlights/video matter.
+	if (changes.highlights || changes.video_annotations) {
+		const urls = new Set([
+			...changedUrlKeys(changes.highlights),
+			...changedUrlKeys(changes.video_annotations),
+		]);
+		if (urls.size) {
+			obsidianMarkDirty([...urls])
+				.then(() => debouncedObsidianFlush())
+				.catch(() => {});
+		}
 	}
 });
 
 if (browser.alarms) {
 	browser.alarms.create(SYNC_ALARM, { periodInMinutes: 5 });
 	browser.alarms.onAlarm.addListener((alarm) => {
-		if (alarm.name === SYNC_ALARM && isSyncConfigured()) {
-			syncToDrive(false).catch(err => console.warn('Drive sync poll failed:', err));
+		if (alarm.name === SYNC_ALARM) {
+			if (isSyncConfigured()) syncToDrive(false).catch(err => console.warn('Drive sync poll failed:', err));
+			// Retry any pending Obsidian writes (e.g. the app was closed earlier).
+			obsidianFlush().catch(() => {});
 		}
 	});
 }
 
 browser.runtime.onStartup.addListener(() => {
 	if (isSyncConfigured()) syncToDrive(false).catch(() => {});
+	obsidianFlush().catch(() => {});
 });
 
 browser.runtime.onMessage.addListener((request: unknown, _sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void): true | undefined => {
 	if (typeof request !== 'object' || request === null) return;
 	const action = (request as any).action as string;
-	if (action !== 'syncConnect' && action !== 'syncDisconnect' && action !== 'syncNow' && action !== 'syncStatus') {
+	const driveActions = ['syncConnect', 'syncDisconnect', 'syncNow', 'syncStatus'];
+	const obsidianActions = ['obsidianGetConfig', 'obsidianSetConfig', 'obsidianTest', 'obsidianSyncAll', 'obsidianStatus'];
+	if (!driveActions.includes(action) && !obsidianActions.includes(action)) {
 		return;
 	}
 	(async () => {
 		try {
+			if (obsidianActions.includes(action)) {
+				let result: any = {};
+				switch (action) {
+					case 'obsidianSetConfig':
+						await setObsidianConfig((request as any).config || {});
+						break;
+					case 'obsidianTest':
+						result.test = await obsidianTestConnection();
+						break;
+					case 'obsidianSyncAll':
+						await obsidianEnqueueAll();
+						await obsidianFlush();
+						break;
+					case 'obsidianGetConfig':
+					case 'obsidianStatus':
+						// no side effect
+						break;
+				}
+				sendResponse({
+					success: true,
+					config: await getObsidianConfig(),
+					status: await getObsidianStatus(),
+					...result,
+				});
+				return;
+			}
+
 			switch (action) {
 				case 'syncConnect':
 					await connectDrive();
@@ -394,6 +469,10 @@ browser.runtime.onMessage.addListener((request: unknown, _sender: browser.Runtim
 			const status = await getSyncStatus();
 			sendResponse({ success: true, status, configured: isSyncConfigured(), redirectUrl: getRedirectUrl() });
 		} catch (err) {
+			if (obsidianActions.includes(action)) {
+				sendResponse({ success: false, error: err instanceof Error ? err.message : String(err), config: await getObsidianConfig(), status: await getObsidianStatus() });
+				return;
+			}
 			const status = await getSyncStatus();
 			sendResponse({ success: false, error: err instanceof Error ? err.message : String(err), status, configured: isSyncConfigured(), redirectUrl: getRedirectUrl() });
 		}

@@ -6,6 +6,8 @@ import {
 	downloadSyncFile,
 	createSyncFile,
 	updateSyncFile,
+	createBinaryFile,
+	downloadBinaryFile,
 } from './google-drive';
 
 // Three-way sync of annotation data to a single JSON file in Google Drive's
@@ -51,25 +53,51 @@ interface StoredDrawings {
 	url: string;
 	strokes: Stroke[];
 }
+// Video annotations. Items carry the same `id`/`updatedAt`/`notes[]` shape as
+// highlights, so they reuse the generic keyed merge + comment merge. A frame
+// item's image is NOT carried here — `frame.driveId` references a separate Drive
+// blob (see google-drive.createBinaryFile); `frame.dataUrl` is local-only.
+interface VideoFrame {
+	dataUrl?: string; // local-only; stripped before the item is synced/merged
+	driveId?: string; // Drive blob id for the frame image
+	[k: string]: unknown;
+}
+interface VideoItem {
+	id: string;
+	notes?: string[];
+	updatedAt?: number;
+	frame?: VideoFrame;
+	[k: string]: unknown;
+}
+interface StoredVideo {
+	url: string;
+	videoId?: string;
+	title?: string;
+	items: VideoItem[];
+}
 type HighlightsStorage = Record<string, StoredHighlights>;
 type DrawingsStorage = Record<string, StoredDrawings>;
+type VideoStorage = Record<string, StoredVideo>;
 
 interface Tombstones {
 	highlights: Record<string, number>; // highlightId -> deletedAt
 	drawings: Record<string, number>; // strokeId -> deletedAt
 	comments: Record<string, number>; // `${highlightId}:${commentTs}` -> deletedAt
+	videoItems: Record<string, number>; // videoItemId -> deletedAt
 }
 
 interface SyncFile {
 	version: 1;
 	highlights: HighlightsStorage;
 	drawings: DrawingsStorage;
+	videoAnnotations: VideoStorage;
 	tombstones: Tombstones;
 }
 
 interface Snapshot {
 	highlights: HighlightsStorage;
 	drawings: DrawingsStorage;
+	videoAnnotations: VideoStorage;
 }
 
 export interface SyncStatus {
@@ -80,7 +108,7 @@ export interface SyncStatus {
 }
 
 function emptyTombstones(): Tombstones {
-	return { highlights: {}, drawings: {}, comments: {} };
+	return { highlights: {}, drawings: {}, comments: {}, videoItems: {} };
 }
 
 // --- Comment marker parsing (no DOM; mirrors comment-overlays.parseNoteString) -
@@ -309,6 +337,77 @@ function mergeDrawingsStorage(
 	return out;
 }
 
+// --- Video annotation merge --------------------------------------------------
+
+function videoItemVersion(it: VideoItem): number {
+	return it.updatedAt || parseInt(it.id, 10) || 0;
+}
+
+function mergeVideoStorage(
+	base: VideoStorage,
+	local: VideoStorage,
+	remote: VideoStorage,
+	tombs: Tombstones,
+	now: number,
+): VideoStorage {
+	const out: VideoStorage = {};
+	const urls = new Set([...Object.keys(base), ...Object.keys(local), ...Object.keys(remote)]);
+
+	for (const url of urls) {
+		const bMap = byId(base[url]?.items);
+		const lMap = byId(local[url]?.items);
+		const rMap = byId(remote[url]?.items);
+
+		const combine = (l: VideoItem, r: VideoItem): VideoItem => {
+			const newer = videoItemVersion(l) >= videoItemVersion(r) ? l : r;
+			const notes = mergeNotes(bMap.get(l.id)?.notes, l.notes, r.notes, tombs.comments, l.id, now);
+			// Keep whichever side carries a frame blob id, so a frame uploaded on one
+			// device isn't lost when the other device (which only has metadata) wins on time.
+			const frame = newer.frame || l.frame || r.frame;
+			return { ...newer, notes, ...(frame ? { frame } : {}) };
+		};
+
+		const { kept, tombs: itTombs } = mergeKeyed(
+			bMap,
+			lMap,
+			rMap,
+			tombs.videoItems,
+			videoItemVersion,
+			combine,
+			now,
+		);
+		tombs.videoItems = itTombs;
+
+		if (kept.size > 0) {
+			const videoId = local[url]?.videoId ?? remote[url]?.videoId ?? base[url]?.videoId;
+			const title = local[url]?.title ?? remote[url]?.title ?? base[url]?.title;
+			out[url] = {
+				url,
+				...(videoId ? { videoId } : {}),
+				...(title ? { title } : {}),
+				items: [...kept.values()],
+			};
+		}
+	}
+	return out;
+}
+
+// Strip local-only frame image data so it never enters the merge/upload payload.
+function stripFrames(store: VideoStorage): VideoStorage {
+	const out: VideoStorage = {};
+	for (const url of Object.keys(store)) {
+		out[url] = {
+			...store[url],
+			items: (store[url].items || []).map((it) => {
+				if (!it.frame) return it;
+				const { dataUrl, ...frameRest } = it.frame;
+				return { ...it, frame: frameRest };
+			}),
+		};
+	}
+	return out;
+}
+
 // --- Status helpers ----------------------------------------------------------
 
 async function setStatus(patch: Partial<SyncStatus>): Promise<void> {
@@ -353,19 +452,60 @@ async function doSync(interactive: boolean): Promise<void> {
 	try {
 		const now = Date.now();
 
-		const localStore = await browser.storage.local.get(['highlights', 'drawings', SNAPSHOT_KEY]);
+		const localStore = await browser.storage.local.get([
+			'highlights',
+			'drawings',
+			'video_annotations',
+			SNAPSHOT_KEY,
+		]);
+		const localVideo = (localStore.video_annotations as VideoStorage) || {};
 		const local: Snapshot = {
 			highlights: (localStore.highlights as HighlightsStorage) || {},
 			drawings: (localStore.drawings as DrawingsStorage) || {},
+			videoAnnotations: localVideo,
 		};
 		const snapshot: Snapshot = (localStore[SNAPSHOT_KEY] as Snapshot) || {
 			highlights: {},
 			drawings: {},
+			videoAnnotations: {},
 		};
+
+		// Upload any local frame image that doesn't yet have a Drive blob, stamping
+		// its `driveId` back into local storage. Also index every local image by item
+		// id so we can re-attach it after the merge without re-downloading.
+		const localImages = new Map<string, string>();
+		let uploadedNewBlob = false;
+		for (const url of Object.keys(localVideo)) {
+			for (const item of localVideo[url].items || []) {
+				const f = item.frame;
+				if (!f || !f.dataUrl) continue;
+				localImages.set(item.id, f.dataUrl);
+				if (!f.driveId) {
+					try {
+						const meta = await createBinaryFile(
+							`frame-${item.id}.jpg`,
+							f.dataUrl.split(',')[1] || '',
+							'image/jpeg',
+							interactive,
+						);
+						f.driveId = meta.id;
+						uploadedNewBlob = true;
+					} catch {
+						// Leave dataUrl-only; a later sync retries the upload.
+					}
+				}
+			}
+		}
 
 		// Load remote (or start a fresh file).
 		const fileMeta = await findSyncFile(interactive);
-		let remote: SyncFile = { version: 1, highlights: {}, drawings: {}, tombstones: emptyTombstones() };
+		let remote: SyncFile = {
+			version: 1,
+			highlights: {},
+			drawings: {},
+			videoAnnotations: {},
+			tombstones: emptyTombstones(),
+		};
 		if (fileMeta) {
 			try {
 				const parsed = JSON.parse(await downloadSyncFile(fileMeta.id, interactive));
@@ -373,6 +513,7 @@ async function doSync(interactive: boolean): Promise<void> {
 					version: 1,
 					highlights: parsed.highlights || {},
 					drawings: parsed.drawings || {},
+					videoAnnotations: parsed.videoAnnotations || {},
 					tombstones: { ...emptyTombstones(), ...(parsed.tombstones || {}) },
 				};
 			} catch {
@@ -384,6 +525,7 @@ async function doSync(interactive: boolean): Promise<void> {
 			highlights: { ...remote.tombstones.highlights },
 			drawings: { ...remote.tombstones.drawings },
 			comments: { ...remote.tombstones.comments },
+			videoItems: { ...remote.tombstones.videoItems },
 		};
 
 		const mergedHighlights = mergeHighlightsStorage(
@@ -400,6 +542,38 @@ async function doSync(interactive: boolean): Promise<void> {
 			tombs,
 			now,
 		);
+		// Merge on frame-image-free copies so JPEG data never enters the payload.
+		const mergedVideo = mergeVideoStorage(
+			stripFrames(snapshot.videoAnnotations),
+			stripFrames(localVideo),
+			stripFrames(remote.videoAnnotations),
+			tombs,
+			now,
+		);
+
+		// Re-attach frame images for local storage: prefer the image we already had,
+		// otherwise lazily download the blob referenced by a remote-originated frame.
+		const mergedVideoLocal: VideoStorage = {};
+		for (const url of Object.keys(mergedVideo)) {
+			const items: VideoItem[] = [];
+			for (const it of mergedVideo[url].items) {
+				const f = it.frame;
+				if (f && f.driveId) {
+					let dataUrl = localImages.get(it.id);
+					if (!dataUrl) {
+						try {
+							dataUrl = await downloadBinaryFile(f.driveId, interactive);
+						} catch {
+							/* image temporarily unavailable — keep metadata, fetch next sync */
+						}
+					}
+					items.push(dataUrl ? { ...it, frame: { ...f, dataUrl } } : it);
+				} else {
+					items.push(it);
+				}
+			}
+			mergedVideoLocal[url] = { ...mergedVideo[url], items };
+		}
 
 		// Apply to local storage only if something actually changed, so the
 		// resulting storage.onChanged doesn't trigger an endless sync loop.
@@ -410,7 +584,14 @@ async function doSync(interactive: boolean): Promise<void> {
 		if (JSON.stringify(mergedDrawings) !== JSON.stringify(local.drawings)) {
 			localWrite.drawings = mergedDrawings;
 		}
-		const newSnapshot: Snapshot = { highlights: mergedHighlights, drawings: mergedDrawings };
+		if (uploadedNewBlob || JSON.stringify(mergedVideoLocal) !== JSON.stringify(localVideo)) {
+			localWrite.video_annotations = mergedVideoLocal;
+		}
+		const newSnapshot: Snapshot = {
+			highlights: mergedHighlights,
+			drawings: mergedDrawings,
+			videoAnnotations: mergedVideo,
+		};
 		localWrite[SNAPSHOT_KEY] = newSnapshot;
 		await browser.storage.local.set(localWrite);
 
@@ -419,6 +600,7 @@ async function doSync(interactive: boolean): Promise<void> {
 			version: 1,
 			highlights: mergedHighlights,
 			drawings: mergedDrawings,
+			videoAnnotations: mergedVideo,
 			tombstones: tombs,
 		};
 		const mergedJson = JSON.stringify(mergedFile);
@@ -426,6 +608,7 @@ async function doSync(interactive: boolean): Promise<void> {
 			version: 1,
 			highlights: remote.highlights,
 			drawings: remote.drawings,
+			videoAnnotations: remote.videoAnnotations,
 			tombstones: remote.tombstones,
 		});
 		if (!fileMeta) {

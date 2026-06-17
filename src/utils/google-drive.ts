@@ -200,3 +200,49 @@ export async function updateSyncFile(fileId: string, content: string, interactiv
 	);
 	return (await res.json()) as DriveFileMeta;
 }
+
+// --- Binary blobs (video frame images) ---------------------------------------
+// Frame screenshots are kept as their own appDataFolder files rather than inlined
+// into clipper-sync.json, so the (large) JPEG payloads never bloat the JSON that
+// the 3-way merge parses/uploads on every sync. The sync engine stores each
+// blob's Drive id in the frame's metadata and lazily fetches images it lacks.
+
+/** Upload a base64 (no data: prefix) blob as a new appDataFolder file. */
+export async function createBinaryFile(
+	name: string,
+	base64: string,
+	mimeType: string,
+	interactive = false,
+): Promise<DriveFileMeta> {
+	const boundary = '-------obsidianclipperblob';
+	const metadata = { name, parents: ['appDataFolder'] };
+	const body =
+		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+		`--${boundary}\r\nContent-Type: ${mimeType}\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64}\r\n` +
+		`--${boundary}--`;
+	const res = await driveFetch(
+		`${DRIVE_UPLOAD}?uploadType=multipart&fields=id,name`,
+		{ method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body },
+		interactive,
+	);
+	return (await res.json()) as DriveFileMeta;
+}
+
+/** Download a blob and return it as a `data:<mime>;base64,...` URL. */
+export async function downloadBinaryFile(fileId: string, interactive = false): Promise<string> {
+	const res = await driveFetch(`${DRIVE_FILES}/${fileId}?alt=media`, { method: 'GET' }, interactive);
+	const buf = await res.arrayBuffer();
+	const bytes = new Uint8Array(buf);
+	let binary = '';
+	const chunk = 0x8000; // chunk to avoid call-stack limits on String.fromCharCode
+	for (let i = 0; i < bytes.length; i += chunk) {
+		binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+	}
+	const mime = res.headers.get('Content-Type') || 'image/jpeg';
+	return `data:${mime};base64,${btoa(binary)}`;
+}
+
+/** Best-effort delete of an appDataFolder file (e.g. an orphaned frame blob). */
+export async function deleteDriveFile(fileId: string, interactive = false): Promise<void> {
+	await driveFetch(`${DRIVE_FILES}/${fileId}`, { method: 'DELETE' }, interactive);
+}

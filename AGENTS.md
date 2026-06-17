@@ -29,9 +29,13 @@ This branch adds **live-webpage annotation** (highlights, comments, freehand dra
 | `src/highlights.html` | Dashboard page markup. |
 | `src/utils/video/` | YouTube video notes: `youtube-detect` (player/SPA), `frame-capture` (canvas + screenshot fallback), `video-annotator` (in-page frame/draw overlay), `video-markup` (draw renderer), `video-storage`, `video-notes`, `video-transcript` (caption-track fetch/parse), `video-transcript-panel` (the `T` transcript-annotation panel), `video-comments` (per-video conversation comment panel). |
 | `src/core/video-highlights.ts` | Dashboard render path for video frame cards + timestamped notes. |
-| `src/utils/sync-engine.ts` | 3-way merge sync state machine, tombstones, push/pull. |
-| `src/utils/google-drive.ts` | Google Drive REST + OAuth (implicit grant), appdata file. |
+| `src/utils/sync-engine.ts` | 3-way merge sync state machine, tombstones, push/pull (highlights, drawings, video). |
+| `src/utils/google-drive.ts` | Google Drive REST + OAuth (implicit grant), appdata file + binary blobs. |
 | `src/managers/sync-settings.ts` | Settings UI for connect/disconnect/"Sync now". |
+| `src/utils/obsidian-rest.ts` | Local REST API client (config, ping, note/binary PUT/GET). |
+| `src/utils/obsidian-export.ts` | Pure serializers: annotations → Markdown (managed region, `<mark>` colors, callouts). |
+| `src/utils/obsidian-sync.ts` | Obsidian push orchestrator: dirty queue, offline-aware flush, path map, CSS snippet. |
+| `src/managers/obsidian-sync-settings.ts` | Settings UI for the Obsidian REST sync. |
 | `src/background.ts` | Message routing, `open_dashboard`, sync alarms + debounced push. |
 | `src/types/types.ts` | Shared data types. |
 
@@ -69,12 +73,16 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - `markup` = `{ strokes, lines, texts }` with all coords **normalized 0..1** of the frame, so they
   repaint correctly over the saved image at any size.
 - `notes[]` reuse the same `<!--timestamp--><!--edited-->` chat-message format as highlight comments.
-- Frames are downscaled JPEG (~1280px) and stay **local-only** (not pushed through Drive sync).
+- Frames are downscaled JPEG (~1280px). The frame **metadata + markup + notes + transcript items
+  are Drive-synced**; the JPEG itself is stored as a **separate Drive appData blob** (referenced by
+  `frame.driveId`) and never inlined into `clipper-sync.json`, so the merge payload stays small.
+  `frame.dataUrl` is local-only and lazily re-downloaded from the blob on devices that lack it.
 
 ### Sync state
 - Local base snapshot: `sync_snapshot` (for 3-way reconcile).
-- Drive file: `clipper-sync.json` in `drive.appdata` (hidden, app-scoped).
-- `SyncFile` = `{ version:1, highlights, drawings, tombstones:{highlights,drawings,comments} }`.
+- Drive file: `clipper-sync.json` in `drive.appdata` (hidden, app-scoped); frame JPEGs live beside it
+  as separate `frame-<itemId>.jpg` appData blobs.
+- `SyncFile` = `{ version:1, highlights, drawings, videoAnnotations, tombstones:{highlights,drawings,comments,videoItems} }`.
 
 ---
 
@@ -118,7 +126,8 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 
 ### 3.5 Google Drive sync
 - Google OAuth via `browser.identity`; connect/disconnect from settings.
-- Syncs `highlights` + `drawings` as a single `clipper-sync.json` in an app-scoped Drive folder.
+- Syncs `highlights` + `drawings` + `video_annotations` (transcript items, notes, frame markup) as a
+  single `clipper-sync.json` in an app-scoped Drive folder; frame images sync as separate appData blobs.
 - **3-way merge** (base snapshot vs local vs remote): newest edit wins per item; comments from both
   devices are kept; deletions tracked as **tombstones** so they don't resurrect.
 - **Push**: automatic shortly after a change. **Pull**: periodic + on startup. **"Sync now"** button
@@ -161,9 +170,29 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   comment-only (`N`) flows now open this same panel (the frame draw step is unchanged); `Esc` from it
   returns to the transcript panel when opened from there, otherwise resumes the video.
 - Dashboard renders transcript items as a colored quote block + `M:SS–M:SS` badge, in video-time order
-  alongside frame/note cards. Transcript items, like frames, stay **local-only** (not Drive-synced).
+  alongside frame/note cards. Transcript items and frames are **Drive-synced** (see §2 / §3.5).
 
-### 3.8 Keyboard shortcut reference
+### 3.8 Obsidian sync (Local REST API)
+- **Separate pipeline from Drive sync** (Drive = device↔device data backup; this = formatted notes out).
+- Transport: the **Local REST API** community plugin over its **insecure HTTP server** (`http://127.0.0.1:27123`)
+  — the HTTPS server's self-signed cert can't be validated by an extension `fetch`. User enables that
+  server, pastes the API key + base folder in Settings → Sync → Obsidian sync.
+- **One note per page/video** at `<folder>/<hostname>/<title>.md` (stable per-URL path map; hash suffix on
+  collision). Our content is wrapped in a `%% clipper:start/end %%` **managed region** so re-syncs never
+  clobber the user's own edits; frontmatter (`source`, `domain`, `type`, `captured`, `tags`) is written on create.
+- **Format:** each annotation is a node separated by `---`. Highlights → `> [!quote]` callout with the source
+  text in `<mark class="hl-{color}">` (a `.obsidian/snippets/clipper-highlights.css` snippet, pushed once,
+  maps the classes to colors); comments → nested `> [!note]-` callout. **Image** (element) highlights embed
+  the image by resolved remote URL at a capped width (`![alt|480](src)`) rather than dumping `<img>` HTML.
+  YouTube items render in video-time
+  order with `M:SS` deep links (`&t=Ns`); frames embed `![[youtube-<videoId>-<itemId>.jpg]]` and the JPEG is
+  PUT to `<folder>/Attachments/`.
+- **Triggers:** live on change (per-page/video changes enqueue their URL; ~3 s debounced flush — short so it
+  fires before the MV3 service worker idles out, which would otherwise drop the timer) + a manual
+  **"Sync all now"** button. **Offline-safe:** if Obsidian/the plugin is unreachable the queue is kept and
+  retried on the sync alarm (5 min) and on startup, so pending changes flush automatically once it's back.
+
+### 3.9 Keyboard shortcut reference
 | Key | Action |
 |-----|--------|
 | `H` | Toggle highlighter |

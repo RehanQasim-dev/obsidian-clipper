@@ -737,6 +737,59 @@
 								</div>
 							</div>
 						</div>
+
+						<div class="setting-group">
+							<div class="setting-items">
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label>Obsidian sync</label>
+										<div class="setting-item-description">
+											Write your highlights, comments and YouTube notes into your Obsidian vault as Markdown notes (one per page/video). Requires the <strong>Local REST API</strong> community plugin with its <strong>insecure HTTP server</strong> enabled; paste its API key below. Syncs live on change and queues changes while Obsidian is closed.
+										</div>
+									</div>
+									<div class="setting-item-control">
+										<input type="checkbox" id="obsidian-sync-enabled" />
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label>Server URL</label>
+										<div class="setting-item-description">The plugin's insecure HTTP server, e.g. <code>http://127.0.0.1:27123</code></div>
+									</div>
+									<div class="setting-item-control">
+										<input type="text" id="obsidian-sync-baseurl" placeholder="http://127.0.0.1:27123" />
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label>API key</label>
+										<div class="setting-item-description">From Obsidian → Settings → Local REST API.</div>
+									</div>
+									<div class="setting-item-control">
+										<input type="password" id="obsidian-sync-apikey" placeholder="Bearer token" />
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label>Vault folder</label>
+										<div class="setting-item-description">Base folder for clipped notes; a subfolder per site is created inside it.</div>
+									</div>
+									<div class="setting-item-control">
+										<input type="text" id="obsidian-sync-folder" placeholder="Clippings" />
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label>Status</label>
+										<div id="obsidian-sync-status" class="setting-item-description">Disabled.</div>
+									</div>
+									<div class="setting-item-control">
+										<button type="button" id="obsidian-sync-test-btn">Test connection</button>
+										<button type="button" id="obsidian-sync-all-btn" class="mod-cta">Sync all now</button>
+									</div>
+								</div>
+							</div>
+						</div>
 					</div>
 
 					<div id="templates-section" class="settings-section">
