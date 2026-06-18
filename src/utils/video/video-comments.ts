@@ -264,7 +264,11 @@ function onKeyDown(e: KeyboardEvent) {
 		// Typing: shield everything from YouTube's shortcuts (Space, etc.).
 		e.stopPropagation();
 		if (e.key === 'Escape') { e.preventDefault(); teardown(); }
-		else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postMessage(); }
+		else if (e.key === 'Enter' && !e.shiftKey) { 
+			if (e.isComposing) return;
+			e.preventDefault(); 
+			postMessage(); 
+		}
 		return;
 	}
 	// Not typing: only claim Escape; let every other key reach YouTube (Space →

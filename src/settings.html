@@ -711,6 +711,13 @@
 										<label data-i18n="syncGoogleDrive">Google Drive sync</label>
 										<div class="setting-item-description" data-i18n="syncGoogleDriveDescription">
 											Back up and sync your highlights, comments, and drawings to your own Google Drive so they follow you across browsers and machines.
+											<br><br>
+											<b>This handles a two-way sync (both push and pull).</b><br>
+											It automatically runs this two-way sync on these occasions:<br>
+											1. Live: 5 seconds after you stop making changes.<br>
+											2. On Browser Startup: The moment you launch your web browser.<br>
+											3. Every 5 Minutes: In the background automatically.<br>
+											4. Manually: Whenever you click the "Sync now" button below.
 										</div>
 									</div>
 									<div class="setting-item-control">
@@ -794,6 +801,9 @@
 									<div class="setting-item-info">
 										<label>Status</label>
 										<div id="obsidian-sync-status" class="setting-item-description">Disabled.</div>
+										<div class="setting-item-description" style="margin-top: 4px;">
+											"Sync all now" only handles pushing your annotations, creating the source file and comments file.
+										</div>
 									</div>
 									<div class="setting-item-control">
 										<button type="button" id="obsidian-sync-test-btn">Test connection</button>

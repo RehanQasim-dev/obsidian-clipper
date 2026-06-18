@@ -26,3 +26,14 @@ export async function getPageSource(url: string): Promise<PageSource | undefined
 	const store = await browser.storage.local.get(PAGE_SOURCES_KEY);
 	return (store[PAGE_SOURCES_KEY] as PageSources | undefined)?.[key];
 }
+
+/** Remove the stored source for `url`. */
+export async function deletePageSource(url: string): Promise<void> {
+	const key = normalizeUrl(url);
+	const store = await browser.storage.local.get(PAGE_SOURCES_KEY);
+	const sources = (store[PAGE_SOURCES_KEY] as PageSources | undefined);
+	if (sources && sources[key]) {
+		delete sources[key];
+		await browser.storage.local.set({ [PAGE_SOURCES_KEY]: sources });
+	}
+}

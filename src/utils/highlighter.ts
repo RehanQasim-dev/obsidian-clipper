@@ -1034,48 +1034,49 @@ function highlightContentEqual(a: AnyHighlightData, b: AnyHighlightData): boolea
 	return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 }
 
+let highlightsStorageQueue = Promise.resolve();
+
 export function saveHighlights() {
 	const rawUrl = getPageUrl();
 	const url = normalizeUrl(rawUrl);
-	if (highlights.length > 0) {
-		const title = pageTitle || document.title || undefined;
-		// Capture the full page as Markdown once, so the Obsidian note can carry
-		// the source content the plugin re-anchors against. Fire-and-forget.
-		void capturePageSourceIfNeeded(url, title);
-		browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
-			const allHighlights: HighlightsStorage = result.highlights || {};
-			// Stamp updatedAt on highlights whose own fields changed vs. what's
-			// persisted, so the sync engine can resolve cross-device conflicts by
-			// most-recent edit.
-			const prevById = new Map((allHighlights[url]?.highlights || []).map(h => [h.id, h]));
-			const now = Date.now();
-			const stamped = highlights.map(h => {
-				const prev = prevById.get(h.id);
-				return (!prev || !highlightContentEqual(prev, h)) ? { ...h, updatedAt: now } : h;
-			});
-			allHighlights[url] = { highlights: stamped, url, title };
-			browser.storage.local.set({ highlights: allHighlights });
-		});
-		const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute('content');
-		if (ogSiteName) {
-			const hostname = new URL(rawUrl).hostname.replace(/^www\./, '');
-			browser.storage.local.get('domains').then((result: { domains?: Record<string, DomainSettings> }) => {
-				const domains = result.domains || {};
-				if (!domains[hostname]?.site) {
-					if (!domains[hostname]) domains[hostname] = {};
-					domains[hostname].site = ogSiteName;
-					browser.storage.local.set({ domains });
+
+	highlightsStorageQueue = highlightsStorageQueue.then(() => {
+		if (highlights.length > 0) {
+			const title = pageTitle || document.title || undefined;
+			void capturePageSourceIfNeeded(url, title);
+			return browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
+				const allHighlights: HighlightsStorage = result.highlights || {};
+				const prevById = new Map((allHighlights[url]?.highlights || []).map(h => [h.id, h]));
+				const now = Date.now();
+				const stamped = highlights.map(h => {
+					const prev = prevById.get(h.id);
+					return (!prev || !highlightContentEqual(prev, h)) ? { ...h, updatedAt: now } : h;
+				});
+				allHighlights[url] = { highlights: stamped, url, title };
+				return browser.storage.local.set({ highlights: allHighlights });
+			}).then(() => {
+				const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute('content');
+				if (ogSiteName) {
+					const hostname = new URL(rawUrl).hostname.replace(/^www\./, '');
+					return browser.storage.local.get('domains').then((result: { domains?: Record<string, DomainSettings> }) => {
+						const domains = result.domains || {};
+						if (!domains[hostname]?.site) {
+							if (!domains[hostname]) domains[hostname] = {};
+							domains[hostname].site = ogSiteName;
+							return browser.storage.local.set({ domains });
+						}
+					});
 				}
 			});
+		} else {
+			return browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
+				const allHighlights: HighlightsStorage = result.highlights || {};
+				delete allHighlights[url];
+				if (rawUrl !== url) delete allHighlights[rawUrl];
+				return browser.storage.local.set({ highlights: allHighlights });
+			});
 		}
-	} else {
-		browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
-			const allHighlights: HighlightsStorage = result.highlights || {};
-			delete allHighlights[url];
-			if (rawUrl !== url) delete allHighlights[rawUrl];
-			browser.storage.local.set({ highlights: allHighlights });
-		});
-	}
+	}).catch(console.error);
 }
 
 export function invalidateHighlightCache() {
@@ -1128,22 +1129,18 @@ function commitHighlightChanges() {
 export function updateHighlightColor(id: string, color: 'yellow' | 'red' | 'green') {
 	const highlight = highlights.find(h => h.id === id);
 	if (!highlight) return;
-	
+	const now = Date.now();
+	let newHighlights = [...highlights];
 	if (highlight.groupId) {
-		highlights.filter(h => h.groupId === highlight.groupId).forEach(h => h.color = color);
+		newHighlights = newHighlights.map(h => h.groupId === highlight.groupId ? { ...h, color, updatedAt: now } : h);
 	} else {
-		highlight.color = color;
+		newHighlights = newHighlights.map(h => h.id === id ? { ...h, color, updatedAt: now } : h);
 	}
+	
+	updateHighlights(newHighlights);
 	
 	currentHighlightColor = color;
 	document.body.dataset.obsidianColor = color;
-
-	// Recoloring is a real mutation, but it only changes an existing highlight's
-	// `color` field — the version counter wouldn't otherwise move, so
-	// applyHighlights()'s dirty-check would skip the repaint and the new color
-	// would only appear when some unrelated event (scroll/resize) happened to
-	// invalidate the cache first. Bump so the repaint always runs.
-	bumpHighlightsVersion();
 
 	commitHighlightChanges();
 }

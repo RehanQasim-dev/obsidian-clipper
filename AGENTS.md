@@ -250,10 +250,11 @@ imports the other's `src/`).
   plugin's `sync.ts` import these merge functions, so there is a single implementation of the
   conflict-resolution logic (`sync-engine.ts` keeps only its orchestrator, storage types, and
   frame-stripping; the structurally-identical storage types stay declared locally).
-- **Full page source → Obsidian (once):** the extension captures the readable page as Markdown
-  (`page-source-capture.ts`, Defuddle) on first save and stores it under `page_sources`; the Obsidian
-  sync writes it below the managed region on note creation (immutable; re-syncs never touch it), so
-  the plugin has content to render and re-anchor against.
+- **Full page source → Obsidian:** the extension captures the readable page as Markdown
+  (`page-source-capture.ts`, Defuddle) on first save and temporarily stores it under `page_sources`.
+  The Obsidian sync writes it below the managed region on note creation (immutable; re-syncs never
+  touch it), so the plugin has content to render and re-anchor against. Once successfully synced to Obsidian,
+  the stored page source is automatically deleted from local storage to conserve space.
 - **Bidirectional Drive sync:** the plugin is a second client of the same Drive `clipper-sync.json`
   via Google's **device-authorization OAuth** flow (`drive.ts`, no redirect/server, works on mobile);
   `sync.ts` maps annotations ↔ the highlight shape, merges via `shared/merge`, and passes the

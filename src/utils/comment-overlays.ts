@@ -411,6 +411,7 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		if (!isNew && !isEdit) return;
 
 		if (e.key === 'Enter' && !e.shiftKey) {
+			if (e.isComposing) return;
 			e.preventDefault();
 			if (isNew) {
 				saveComment(highlight.id, ta.value.trim());

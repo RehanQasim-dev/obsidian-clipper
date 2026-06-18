@@ -116,8 +116,9 @@ export interface SyncStatus {
 }
 
 // Strip local-only frame image data so it never enters the merge/upload payload.
-function stripFrames(store: VideoStorage): VideoStorage {
+function stripFrames(store: VideoStorage | undefined): VideoStorage {
 	const out: VideoStorage = {};
+	if (!store) return out;
 	for (const url of Object.keys(store)) {
 		out[url] = {
 			...store[url],

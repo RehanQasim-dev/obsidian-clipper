@@ -898,5 +898,6 @@ export function removeExistingHighlights() {
 	document.querySelectorAll('.obsidian-highlight-overlay').forEach(el => el.remove());
 	clearTextHighlights();
 	hideHighlightActionMenu();
-	clearCommentBoxes();
+	// renderCommentBoxes() handles its own cleanup. Clearing them here destroys
+	// the active textarea (and any typed text) if applyHighlights() is triggered.
 }

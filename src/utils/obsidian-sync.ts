@@ -17,7 +17,7 @@ import {
 	CLIP_CSS,
 	CLIP_CSS_VERSION,
 } from './obsidian-export';
-import { getPageSource } from './page-source';
+import { getPageSource, deletePageSource } from './page-source';
 
 // Background orchestrator for pushing annotations into Obsidian via the Local
 // REST API. Live on change: edits enqueue their normalized URL; a debounced flush
@@ -206,6 +206,11 @@ async function processUrl(cfg: ObsidianRestConfig, url: string): Promise<void> {
 		commentsPath,
 		assembleCommentsNote(existingComments, title, url, noteName(sourcePath), blocks.join('\n\n'), commentsProps, cfg.theme),
 	);
+
+	// Both notes synced successfully; the source is safe to garbage collect
+	if (source) {
+		await deletePageSource(url);
+	}
 }
 
 // --- CSS snippet (highlight colors), pushed once -----------------------------

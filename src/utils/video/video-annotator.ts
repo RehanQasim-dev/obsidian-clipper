@@ -838,7 +838,11 @@ function onKeyDown(e: KeyboardEvent) {
 			// Enter = newline (let it through).
 		} else { // chat box
 			if (e.key === 'Escape') { e.preventDefault(); teardown(true); }
-			else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); postMessage(); }
+			else if (e.key === 'Enter' && !e.shiftKey) { 
+				if (e.isComposing) return;
+				e.preventDefault(); 
+				postMessage(); 
+			}
 		}
 		return;
 	}

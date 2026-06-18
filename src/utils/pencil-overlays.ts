@@ -311,25 +311,29 @@ function strokeContentEqual(a: PencilStroke, b: PencilStroke): boolean {
 	return JSON.stringify(strip(a)) === JSON.stringify(strip(b));
 }
 
+let drawingsStorageQueue = Promise.resolve();
+
 function saveDrawings(): void {
-	const url = normalizeUrl(getPageUrl());
-	browser.storage.local.get('drawings').then((result: { drawings?: DrawingsStorage }) => {
-		const all = result.drawings || {};
-		if (strokes.length > 0) {
-			// Stamp updatedAt on new/changed strokes so the sync engine can resolve
-			// cross-device conflicts by most-recent edit.
-			const prevById = new Map((all[url]?.strokes || []).map(s => [s.id, s]));
-			const now = Date.now();
-			strokes = strokes.map(s => {
-				const prev = prevById.get(s.id);
-				return (!prev || !strokeContentEqual(prev, s)) ? { ...s, updatedAt: now } : s;
-			});
-			all[url] = { url, strokes };
-		} else {
-			delete all[url];
-		}
-		browser.storage.local.set({ drawings: all });
-	});
+	drawingsStorageQueue = drawingsStorageQueue.then(() => {
+		const url = normalizeUrl(getPageUrl());
+		return browser.storage.local.get('drawings').then((result: { drawings?: DrawingsStorage }) => {
+			const all = result.drawings || {};
+			if (strokes.length > 0) {
+				// Stamp updatedAt on new/changed strokes so the sync engine can resolve
+				// cross-device conflicts by most-recent edit.
+				const prevById = new Map((all[url]?.strokes || []).map(s => [s.id, s]));
+				const now = Date.now();
+				strokes = strokes.map(s => {
+					const prev = prevById.get(s.id);
+					return (!prev || !strokeContentEqual(prev, s)) ? { ...s, updatedAt: now } : s;
+				});
+				all[url] = { url, strokes };
+			} else {
+				delete all[url];
+			}
+			return browser.storage.local.set({ drawings: all });
+		});
+	}).catch(console.error);
 }
 
 // Cross-tab sync: pick up drawing changes made in another tab for this URL.

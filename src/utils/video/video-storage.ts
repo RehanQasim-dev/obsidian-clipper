@@ -100,47 +100,60 @@ export async function loadVideoData(url: string): Promise<VideoAnnotationData | 
 }
 
 // Add a new item or replace an existing one (matched by id) for a video.
-export async function upsertVideoItem(
+let storageQueue: Promise<void> = Promise.resolve();
+
+function enqueueWrite(task: () => Promise<void>): Promise<void> {
+	storageQueue = storageQueue.then(task).catch(console.error);
+	return storageQueue;
+}
+
+export function upsertVideoItem(
 	watchUrl: string,
-	videoId: string,
+	videoId: string | undefined,
 	title: string | undefined,
 	item: VideoItem,
 ): Promise<void> {
-	const key = normalizeUrl(watchUrl);
-	const all = await loadAllVideoData();
-	const entry: VideoAnnotationData = all[key] || { url: key, videoId, items: [] };
-	if (title && !entry.title) entry.title = title;
-	entry.videoId = videoId || entry.videoId;
-	item.updatedAt = Date.now();
-	const idx = entry.items.findIndex(i => i.id === item.id);
-	if (idx >= 0) entry.items[idx] = item;
-	else entry.items.push(item);
-	// Keep items ordered by video time so the dashboard timeline is correct.
-	entry.items.sort((a, b) => a.videoTime - b.videoTime);
-	all[key] = entry;
-	await browser.storage.local.set({ [STORAGE_KEY]: all });
+	return enqueueWrite(async () => {
+		const key = normalizeUrl(watchUrl);
+		const all = await loadAllVideoData();
+		const entry: VideoAnnotationData = all[key] || { url: key, videoId, items: [] };
+		if (title && !entry.title) entry.title = title;
+		entry.videoId = videoId || entry.videoId;
+		item.updatedAt = Date.now();
+		const idx = entry.items.findIndex(i => i.id === item.id);
+		if (idx >= 0) entry.items[idx] = item;
+		else entry.items.push(item);
+		// Keep items ordered by video time so the dashboard timeline is correct.
+		entry.items.sort((a, b) => a.videoTime - b.videoTime);
+		all[key] = entry;
+		await browser.storage.local.set({ [STORAGE_KEY]: all });
+	});
 }
 
-export async function updateVideoItemNotes(watchUrl: string, itemId: string, notes: string[]): Promise<void> {
-	const key = normalizeUrl(watchUrl);
-	const all = await loadAllVideoData();
-	const entry = all[key];
-	if (!entry) return;
-	const item = entry.items.find(i => i.id === itemId);
-	if (!item) return;
-	item.notes = notes;
-	item.updatedAt = Date.now();
-	all[key] = entry;
-	await browser.storage.local.set({ [STORAGE_KEY]: all });
+export function updateVideoItemNotes(watchUrl: string, itemId: string, notes: string[]): Promise<void> {
+	return enqueueWrite(async () => {
+		const key = normalizeUrl(watchUrl);
+		const all = await loadAllVideoData();
+		const entry = all[key];
+		if (!entry) return;
+		const item = entry.items.find(i => i.id === itemId);
+		if (!item) return;
+		item.notes = notes;
+		item.updatedAt = Date.now();
+		all[key] = entry;
+		await browser.storage.local.set({ [STORAGE_KEY]: all });
+	});
 }
 
-export async function removeVideoItem(watchUrl: string, itemId: string): Promise<void> {
-	const key = normalizeUrl(watchUrl);
-	const all = await loadAllVideoData();
-	const entry = all[key];
-	if (!entry) return;
-	entry.items = entry.items.filter(i => i.id !== itemId);
-	if (entry.items.length === 0) delete all[key];
-	else all[key] = entry;
-	await browser.storage.local.set({ [STORAGE_KEY]: all });
+export function removeVideoItem(watchUrl: string, itemId: string): Promise<void> {
+	return enqueueWrite(async () => {
+		const key = normalizeUrl(watchUrl);
+		const all = await loadAllVideoData();
+		const entry = all[key];
+		if (!entry) return;
+		entry.items = entry.items.filter(i => i.id !== itemId);
+		if (entry.items.length === 0) delete all[key];
+		else all[key] = entry;
+		await browser.storage.local.set({ [STORAGE_KEY]: all });
+	});
 }
