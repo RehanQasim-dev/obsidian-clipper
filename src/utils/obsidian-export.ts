@@ -323,7 +323,7 @@ export function assembleCommentsNote(
 // --- The vault CSS snippet (both themes) -------------------------------------
 // Bump CLIP_CSS_VERSION whenever CLIP_CSS changes so it re-pushes on next sync.
 
-export const CLIP_CSS_VERSION = 4;
+export const CLIP_CSS_VERSION = 5;
 
 export const CLIP_CSS = `/* Obsidian Web Clipper — annotation styles.
    Auto-generated. Enable under Settings → Appearance → CSS snippets. */
@@ -334,9 +334,9 @@ export const CLIP_CSS = `/* Obsidian Web Clipper — annotation styles.
 }
 
 /* Highlight marks (both themes) */
-mark.hl-yellow { background: rgba(var(--clip-yellow), .28); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-yellow)); border-radius: 3px; padding: 0 .15em; }
-mark.hl-red { background: rgba(var(--clip-red), .26); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-red)); border-radius: 3px; padding: 0 .15em; }
-mark.hl-green { background: rgba(var(--clip-green), .24); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-green)); border-radius: 3px; padding: 0 .15em; }
+mark.hl-yellow { background: rgba(var(--clip-yellow), .18); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-yellow)); border-radius: 3px; padding: 0 .15em; }
+mark.hl-red { background: rgba(var(--clip-red), .15); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-red)); border-radius: 3px; padding: 0 .15em; }
+mark.hl-green { background: rgba(var(--clip-green), .15); color: inherit; box-shadow: inset 0 -2px 0 0 rgb(var(--clip-green)); border-radius: 3px; padding: 0 .15em; }
 
 /* Source link line */
 .clip .markdown-preview-section a[href^="http"]:first-child { font-family: var(--font-monospace); font-size: .8em; color: var(--text-faint); }
