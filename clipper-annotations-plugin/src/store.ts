@@ -38,6 +38,12 @@ export interface Annotation {
 	updatedAt: number;
 	/** Surface the annotation was first created on. */
 	origin: AnchorSurface;
+	/** 'image' for image/element annotations (anchored by image src); else text. */
+	kind?: 'text' | 'image';
+	/** The extension highlight.type this maps to ('element' for images) — kept for round-trip. */
+	htype?: 'text' | 'element';
+	/** Original element outerHTML (image highlights) — kept so the extension can re-render it. */
+	content?: string;
 }
 
 export interface SourceAnnotations {
@@ -127,6 +133,35 @@ export class AnnotationStore {
 			createdAt: now,
 			updatedAt: now,
 			origin: 'obsidian',
+		};
+		b.annotations.push(ann);
+		await this.save(url);
+		return ann;
+	}
+
+	async addImageHighlight(
+		url: string,
+		anchor: AnnotationAnchor,
+		color: HighlightColor,
+		now: number,
+		title?: string,
+	): Promise<Annotation> {
+		const b = this.bucket(url, title);
+		const img = anchor.image;
+		const content = img
+			? `<img src="${img.src}"${img.alt ? ` alt="${img.alt}"` : ''}>`
+			: '';
+		const ann: Annotation = {
+			id: newId('hl', now),
+			color,
+			anchor,
+			comments: [],
+			createdAt: now,
+			updatedAt: now,
+			origin: 'obsidian',
+			kind: 'image',
+			htype: 'element',
+			content,
 		};
 		b.annotations.push(ann);
 		await this.save(url);

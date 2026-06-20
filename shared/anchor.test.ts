@@ -4,7 +4,10 @@ import {
 	buildTextQuote,
 	findTextQuote,
 	createAnchor,
+	createImageAnchor,
 	resolveAnchor,
+	resolveImageElement,
+	imageSrcMatches,
 	locateRange,
 	offsetsFromRange,
 	buildTextMap,
@@ -98,5 +101,48 @@ describe('DOM anchoring (linkedom)', () => {
 		const anchor = anchorFor(webRoot, 'the web page', 'web');
 		const mdRoot = setup('<p>Completely different note content.</p>');
 		expect(resolveAnchor(anchor, mdRoot, 'obsidian')).toBeNull();
+	});
+
+	test('cross-surface: Obsidian quote paints on a live page with messy whitespace', () => {
+		// Captured on Obsidian's rendered Markdown — single-spaced, clean.
+		const mdRoot = setup('<div class="markdown"><p>The shared sentence lives here.</p></div>');
+		const anchor = anchorFor(mdRoot, 'shared sentence lives', 'obsidian');
+		expect(anchor.structural?.surface).toBe('obsidian');
+
+		// Live page: same words but raw newlines, indentation, and a non-breaking space.
+		const webRoot = setup('<article><p>The   shared\n    sentence lives here.</p></article>');
+		const resolved = resolveAnchor(anchor, webRoot, 'web');
+		expect(resolved).not.toBeNull();
+		// The resolved span covers the original (messy) text for those words.
+		expect(textOf(webRoot, resolved!).replace(/\s+/g, ' ')).toBe('shared sentence lives');
+	});
+});
+
+describe('image anchoring', () => {
+	function setup(html: string) {
+		const { document } = parseHTML(`<!doctype html><html><body>${html}</body></html>`);
+		return document.body;
+	}
+
+	test('matches sources exactly, by host+path, and by filename', () => {
+		expect(imageSrcMatches('https://x.com/a.jpg', 'https://x.com/a.jpg')).toBe(true);
+		expect(imageSrcMatches('https://x.com/a.jpg?w=1', 'https://x.com/a.jpg?w=2')).toBe(true);
+		expect(imageSrcMatches('https://cdn1.x/a.jpg', 'https://cdn2.x/a.jpg')).toBe(true); // filename fallback
+		expect(imageSrcMatches('https://x.com/a.jpg', 'https://x.com/b.jpg')).toBe(false);
+	});
+
+	test('resolves an image annotation to the matching <img> across surfaces', () => {
+		const anchor = createImageAnchor('https://site.com/pics/photo.jpg', 'A photo');
+		// Note embeds the same image (Obsidian renders ![](src) → <img src>).
+		const root = setup('<p>before</p><img src="https://site.com/pics/photo.jpg" alt="A photo"><p>after</p>');
+		const el = resolveImageElement(anchor, root);
+		expect(el).not.toBeNull();
+		expect((el as Element).tagName).toBe('IMG');
+	});
+
+	test('returns null when no image matches', () => {
+		const anchor = createImageAnchor('https://site.com/pics/photo.jpg');
+		const root = setup('<img src="https://other.com/different.png">');
+		expect(resolveImageElement(anchor, root)).toBeNull();
 	});
 });

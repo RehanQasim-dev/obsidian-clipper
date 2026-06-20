@@ -242,9 +242,27 @@ as the live-page highlighter, but comments live in a separate panel. It is a **d
 the extension and plugin share logic only through a neutral top-level **`shared/`** folder (neither
 imports the other's `src/`).
 
+- **Image annotations (cross-surface):** an image highlight is an `ElementHighlightData`
+  (`type:'element'`) carrying the `<img>` in `content`. Its cross-surface bridge is an **image anchor**
+  (`anchor.image = { src, alt }`) — the image-equivalent of the text-quote anchor — resolved by
+  `resolveImageElement` (exact src → host+path → filename match), so the *same image* is found on the
+  live page and in the rendered note regardless of relative/absolute/CDN differences. **No Google Drive
+  download** is needed (the image is just a remote URL, present in both the highlight `content` and the
+  note's `![](src)`); only YouTube *frame captures* (binary JPEG blobs) use Drive. The extension stamps
+  `anchor.image` at creation and paints Obsidian-origin image highlights by matching the page `<img>`
+  when xpath fails. The **plugin** treats these as first-class `kind:'image'` annotations: the panel
+  shows an image-preview card with its comment thread below, the matching note image gets a colored
+  **outline** (hover/click ↔ card), and clicking any note image opens the swatch to create a new image
+  annotation. Image annotations + their comments sync bidirectionally just like text (mapped ↔ the
+  `type:'element'` highlight in `sync.ts`; ones with no resolvable image are still preserved verbatim).
+
 - **`shared/anchor.ts`** — the dual anchor model (text-quote + per-surface XPath) and the resolver
-  (XPath-when-native → text-quote fallback → "unplaced", never silently dropped). Operates on a
-  `RangeLike`; pure + unit-tested (`shared/anchor.test.ts`).
+  (XPath-when-native → text-quote fallback → "unplaced", never silently dropped). The text-quote
+  fallback is **whitespace-insensitive** (`findTextQuoteRange`: exact `indexOf` first, then a
+  collapsed-whitespace match that reports the real span) — required because Obsidian's rendered
+  Markdown is single-spaced while a live web page's text nodes carry raw newlines, indentation, and
+  non-breaking spaces; an exact match would never bridge that gap, so highlights made in Obsidian
+  wouldn't paint on the live page. Operates on a `RangeLike`; pure + unit-tested (`shared/anchor.test.ts`).
 - **`shared/merge.ts`** — the pure 3-way `clipper-sync.json` merge (newest-wins, tombstones, comment
   merge), unit-tested (`shared/merge.test.ts`). **Both** the extension's `sync-engine.ts` and the
   plugin's `sync.ts` import these merge functions, so there is a single implementation of the
@@ -259,6 +277,13 @@ imports the other's `src/`).
   via Google's **device-authorization OAuth** flow (`drive.ts`, no redirect/server, works on mobile);
   `sync.ts` maps annotations ↔ the highlight shape, merges via `shared/merge`, and passes the
   extension's drawings/video (and unrenderable highlights) through untouched so nothing is lost.
+
+- **Reading-view painting (plugin):** Obsidian renders reading view progressively and **virtualizes**
+  off-screen sections, so a single post-open repaint paints nothing (text not yet in the DOM) or only
+  the top of the note. The plugin therefore watches the preview root with a **`MutationObserver`** and
+  repaints highlights (rAF-coalesced, panel untouched) whenever sections render in/out — so highlights
+  appear the instant their text exists, on open and on scroll. `resolveAnchor` takes an optional cached
+  `rootText` so a full repaint walks the preview text once, not once per annotation.
 
 - **Live-page painting of cross-surface highlights:** the painter (`renderTextHighlight`) resolves a
   text highlight's range with the native xpath+offset path for web-origin highlights, then **falls

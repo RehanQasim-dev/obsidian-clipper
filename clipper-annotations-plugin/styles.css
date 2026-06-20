@@ -225,3 +225,42 @@
 }
 .oc-unplaced .oc-card { opacity: 0.75; }
 .oc-unplaced-icon { display: inline-flex; }
+
+/* ---- image annotations ---- */
+
+/* In-note: outline the embedded image instead of a text underline. The generic
+   .oc-hl-<color> rules (background + inset underline) don't read on an image, so
+   override with a colored ring. */
+img.oc-img-hl {
+	cursor: pointer;
+	border-radius: 6px;
+	transition: box-shadow 0.12s ease, filter 0.12s ease;
+}
+img.oc-img-hl.oc-hl-yellow { background-color: transparent; box-shadow: 0 0 0 3px var(--oc-yellow-ink); }
+img.oc-img-hl.oc-hl-red { background-color: transparent; box-shadow: 0 0 0 3px var(--oc-red-ink); }
+img.oc-img-hl.oc-hl-green { background-color: transparent; box-shadow: 0 0 0 3px var(--oc-green-ink); }
+img.oc-img-hl.oc-hl-active { filter: saturate(1.15) brightness(0.96); }
+
+/* Panel: a small image preview as the card header, comments below it. */
+.oc-quote.oc-quote-image { background: transparent; padding: 0; }
+.oc-thumb {
+	display: block;
+	max-width: 100%;
+	max-height: 160px;
+	border-radius: 6px;
+	object-fit: contain;
+	background: var(--background-secondary);
+}
+
+/* image thumbnail that failed to load (hotlink-blocked, gone, etc.) */
+.oc-thumb-failed { position: relative; }
+.oc-thumb-failed::after {
+	content: "image unavailable";
+	display: block;
+	padding: 10px;
+	font-size: 11px;
+	color: var(--text-muted);
+	border: 1px dashed var(--background-modifier-border);
+	border-radius: 6px;
+	text-align: center;
+}

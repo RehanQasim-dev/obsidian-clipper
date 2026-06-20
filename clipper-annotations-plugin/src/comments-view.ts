@@ -83,6 +83,13 @@ export class CommentsView extends ItemView {
 
 	refresh(): void {
 		const root = this.contentEl;
+
+		// A repaint can be triggered while the user is typing in a reply box (e.g.
+		// focusing this panel fires Obsidian's active-leaf-change). Rebuilding the
+		// DOM would destroy that textarea — stealing focus and any half-typed text.
+		// Capture the focused reply box so we can restore it after the rebuild.
+		const focused = this.captureFocusedReply();
+
 		root.empty();
 
 		const ctx = this.controller.getContext();
@@ -112,6 +119,32 @@ export class CommentsView extends ItemView {
 			gh.setAttr('title', "These annotations' text was not found in the current note.");
 			for (const ann of ctx.unplaced) this.renderCard(group, ann, true);
 		}
+
+		this.restoreFocusedReply(focused);
+	}
+
+	/** Snapshot the reply box that currently has focus (if any), so refresh can restore it. */
+	private captureFocusedReply(): { annId: string; value: string; start: number; end: number } | null {
+		const active = this.contentEl.ownerDocument.activeElement;
+		if (!(active instanceof HTMLTextAreaElement) || !active.hasClass('oc-reply-input')) return null;
+		if (!this.contentEl.contains(active)) return null;
+		const card = active.closest<HTMLElement>('.oc-card');
+		const annId = card?.dataset.annId;
+		if (!annId) return null;
+		return { annId, value: active.value, start: active.selectionStart ?? 0, end: active.selectionEnd ?? 0 };
+	}
+
+	/** Re-focus the reply box captured before a rebuild, restoring its text + caret. */
+	private restoreFocusedReply(snap: { annId: string; value: string; start: number; end: number } | null): void {
+		if (!snap) return;
+		const input = this.contentEl.querySelector<HTMLTextAreaElement>(
+			`.oc-card[data-ann-id="${cssEscape(snap.annId)}"] .oc-reply-input`,
+		);
+		if (!input) return;
+		input.value = snap.value;
+		autoGrow(input);
+		input.focus();
+		input.setSelectionRange(snap.start, snap.end);
 	}
 
 	private renderCard(parent: HTMLElement, ann: Annotation, unplaced: boolean): void {
@@ -125,9 +158,24 @@ export class CommentsView extends ItemView {
 			card.addEventListener('mouseleave', () => this.controller.emphasizeInSource(null));
 		}
 
-		// Quote header (the highlighted text), with a color stripe via CSS.
+		// Header: an image preview for image annotations, else the quoted text.
 		const head = card.createDiv({ cls: 'oc-card-head' });
-		head.createDiv({ cls: 'oc-quote', text: ann.anchor.quote.quote });
+		const image = ann.anchor.image;
+		if (image?.src) {
+			card.addClass('oc-card-image');
+			const fig = head.createDiv({ cls: 'oc-quote oc-quote-image' });
+			const thumb = fig.createEl('img', { cls: 'oc-thumb' });
+			thumb.referrerPolicy = 'no-referrer'; // many hosts 403 hotlinks with a referer
+			thumb.src = image.src;
+			if (image.alt) thumb.alt = image.alt;
+			thumb.loading = 'lazy';
+			thumb.addEventListener('error', () => {
+				fig.addClass('oc-thumb-failed');
+				fig.setAttr('title', image.src);
+			});
+		} else {
+			head.createDiv({ cls: 'oc-quote', text: ann.anchor.quote.quote });
+		}
 
 		const tools = head.createDiv({ cls: 'oc-card-tools' });
 		for (const color of COLORS) {

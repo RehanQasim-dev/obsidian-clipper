@@ -12,7 +12,7 @@
  */
 
 import { debounce, MarkdownView, Modal, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
-import { createAnchor, type RangeLike } from '../../shared/anchor';
+import { createAnchor, createImageAnchor, type RangeLike } from '../../shared/anchor';
 import { emptySyncFile, type HighlightsStorage, type SyncFile } from '../../shared/merge';
 import { AnnotationStore, normalizeUrl, type Annotation, type HighlightColor } from './store';
 import { repaintHighlights, setActiveHighlight, scrollToHighlight, clearHighlights, type PaintResult } from './render';
@@ -36,6 +36,13 @@ interface PendingSelection {
 	title?: string;
 }
 
+interface PendingImage {
+	src: string;
+	alt?: string;
+	url: string;
+	title?: string;
+}
+
 export default class ClipperAnnotationsPlugin extends Plugin {
 	settings!: ClipperAnnotationSettings;
 	private store!: AnnotationStore;
@@ -49,8 +56,15 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 	private current: CurrentSource | null = null;
 	private lastPaint: PaintResult | null = null;
 	private pending: PendingSelection | null = null;
+	private pendingImage: PendingImage | null = null;
 	private repaintTimer: number | null = null;
 	private syncing = false;
+	// Watches the rendered preview so highlights paint the instant their text
+	// renders — Obsidian renders reading view progressively and virtualizes
+	// off-screen sections, so we can't rely on a single post-open repaint.
+	private previewObserver: MutationObserver | null = null;
+	private observedRoot: HTMLElement | null = null;
+	private paintRaf: number | null = null;
 	private syncPushDebouncer = debounce(() => void this.syncNow(false), 5000, true);
 
 	async onload(): Promise<void> {
@@ -120,9 +134,17 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 			const t = e.target as HTMLElement;
 			if (this.swatch.visible && !t.closest('.oc-swatch')) this.swatch.hide();
 		});
+
+		// Image annotations: click an image in the note to annotate it; hovering an
+		// outlined image emphasizes its card. Capture phase so we win over Obsidian's
+		// own image handling before creating/focusing.
+		this.registerDomEvent(document, 'click', (e) => this.onImageClick(e), true);
+		this.registerDomEvent(document, 'mouseover', (e) => this.onImageHover(e, true), true);
+		this.registerDomEvent(document, 'mouseout', (e) => this.onImageHover(e, false), true);
 	}
 
 	onunload(): void {
+		this.syncPreviewObserver(null);
 		if (this.current) clearHighlights(this.current.root);
 	}
 
@@ -258,15 +280,18 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 		const rv = this.activeReadingView();
 		if (!rv || !(rv.view.file instanceof TFile)) {
 			this.current = null;
+			this.syncPreviewObserver(null);
 			return;
 		}
 		const url = this.sourceUrlFor(rv.view.file);
 		if (!url) {
 			this.current = null;
+			this.syncPreviewObserver(null);
 			return;
 		}
 		const title = this.app.metadataCache.getFileCache(rv.view.file)?.frontmatter?.title ?? rv.view.file.basename;
 		this.current = { file: rv.view.file, url, title, root: rv.root };
+		this.syncPreviewObserver(rv.root);
 	}
 
 	// --- repaint ----------------------------------------------------------
@@ -279,6 +304,7 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 		}, delay);
 	}
 
+	/** Full refresh: re-detect the note, repaint highlights, and rebuild the panel. */
 	private repaint(): void {
 		this.refreshCurrent();
 		if (!this.current) {
@@ -286,18 +312,61 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 			this.view()?.refresh();
 			return;
 		}
+		this.paintCurrent();
 		const anns = this.store.for(this.current.url);
-		this.lastPaint = repaintHighlights(this.current.root, anns, {
-			onHover: (id) => {
-				setActiveHighlight(this.current!.root, id);
-				this.view()?.setActive(id);
-			},
-			onActivate: (id) => {
-				void this.activatePanel().then(() => this.view()?.focusAnnotation(id));
-			},
-		});
 		if (this.settings.autoOpenPanel && anns.length) void this.activatePanel(false);
 		this.view()?.refresh();
+	}
+
+	/** Repaint just the highlights for the current note (no panel rebuild). */
+	private paintCurrent(): void {
+		if (!this.current) return;
+		const root = this.current.root;
+		const anns = this.store.for(this.current.url);
+		// Pause the observer so our own span wrapping doesn't re-trigger a paint.
+		this.previewObserver?.disconnect();
+		try {
+			this.lastPaint = repaintHighlights(root, anns, {
+				onHover: (id) => {
+					setActiveHighlight(this.current!.root, id);
+					this.view()?.setActive(id);
+				},
+				onActivate: (id) => {
+					void this.activatePanel().then(() => this.view()?.focusAnnotation(id));
+				},
+			}, this.current.url);
+		} finally {
+			if (this.previewObserver && this.observedRoot === root) {
+				this.previewObserver.observe(root, { childList: true, subtree: true, characterData: true });
+			}
+		}
+	}
+
+	/** Point the preview observer at `root` (or tear it down when `root` is null). */
+	private syncPreviewObserver(root: HTMLElement | null): void {
+		if (root === this.observedRoot) return;
+		this.previewObserver?.disconnect();
+		if (this.paintRaf != null) {
+			window.cancelAnimationFrame(this.paintRaf);
+			this.paintRaf = null;
+		}
+		this.observedRoot = root;
+		if (!root) {
+			this.previewObserver = null;
+			return;
+		}
+		this.previewObserver = new MutationObserver(() => this.schedulePaint());
+		this.previewObserver.observe(root, { childList: true, subtree: true, characterData: true });
+	}
+
+	/** Coalesce observer bursts (initial render, scroll virtualization) into one paint per frame. */
+	private schedulePaint(): void {
+		if (this.paintRaf != null) return;
+		this.paintRaf = window.requestAnimationFrame(() => {
+			this.paintRaf = null;
+			this.refreshCurrent();
+			this.paintCurrent();
+		});
 	}
 
 	// --- selection → swatch ----------------------------------------------
@@ -316,17 +385,73 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 	private onSelectionEnd(): void {
 		const sel = this.selectionInSource();
 		if (!sel) {
+			// An image was just clicked (this runs on the mouseup that precedes the
+			// click) — keep the swatch the click is about to open.
+			if (this.pendingImage) return;
 			if (this.swatch.visible) this.swatch.hide();
 			return;
 		}
+		this.pendingImage = null;
 		this.pending = sel;
 		const rect = (sel.range as Range).getBoundingClientRect();
 		this.swatch.showFor(rect);
 	}
 
 	private commitHighlight(color: HighlightColor, openComment: boolean): void {
+		if (this.pendingImage) {
+			const pi = this.pendingImage;
+			this.pendingImage = null;
+			void this.createImage(pi, color, openComment);
+			return;
+		}
 		if (!this.pending) return;
 		void this.create(this.pending, color, openComment);
+	}
+
+	/** Create an image annotation (click an image in the note → swatch → color). */
+	private async createImage(pi: PendingImage, color: HighlightColor, openComment: boolean): Promise<void> {
+		this.swatch.hide();
+		const anchor = createImageAnchor(pi.src, pi.alt);
+		const ann = await this.store.addImageHighlight(pi.url, anchor, color, Date.now(), pi.title);
+		this.repaint();
+		if (openComment) {
+			await this.activatePanel();
+			this.view()?.focusAnnotation(ann.id);
+		}
+	}
+
+	// Click an image in the reading view: focus its card if already annotated,
+	// otherwise open the color swatch to create a new image annotation.
+	private onImageClick(e: MouseEvent): void {
+		const target = e.target as HTMLElement | null;
+		const img = target?.closest?.('img') as HTMLImageElement | null;
+		if (!img) return; // cheap early-out before re-detecting the source note
+		this.refreshCurrent();
+		if (!this.current || !this.current.root.contains(img)) return;
+
+		const existingId = img.dataset.annId;
+		if (existingId) {
+			e.preventDefault();
+			e.stopPropagation();
+			void this.activatePanel().then(() => this.view()?.focusAnnotation(existingId));
+			return;
+		}
+		const src = img.currentSrc || img.src || img.getAttribute('src') || '';
+		if (!src) return;
+		e.preventDefault();
+		e.stopPropagation();
+		this.pending = null;
+		const alt = img.getAttribute('alt') || undefined;
+		this.pendingImage = { src, alt, url: this.current.url, title: this.current.title };
+		this.swatch.showFor(img.getBoundingClientRect());
+	}
+
+	// Hovering an outlined image emphasizes its card (mirrors text-span hover).
+	private onImageHover(e: MouseEvent, on: boolean): void {
+		if (!this.current) return;
+		const img = (e.target as HTMLElement | null)?.closest?.('.oc-img-hl') as HTMLElement | null;
+		if (!img || !this.current.root.contains(img)) return;
+		this.view()?.setActive(on ? img.dataset.annId ?? null : null);
 	}
 
 	private commitHighlightFromSelection(color: HighlightColor, openComment: boolean): void {
@@ -386,14 +511,16 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 			revealInSource: (id) => {
 				if (!this.current) return;
 				const escapedId = id.replace(/["\\]/g, '\\$&');
-				const el = this.current.root.querySelector(`span.oc-hl[data-ann-id="${escapedId}"]`);
+				const el = this.current.root.querySelector(
+					`span.oc-hl[data-ann-id="${escapedId}"], .oc-img-hl[data-ann-id="${escapedId}"]`,
+				);
 				if (el) {
 					el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 					return;
 				}
 				// If virtualized off-screen, scroll to the corresponding line.
 				const ann = this.store.for(this.current.url).find((a) => a.id === id);
-				if (!ann) return;
+				if (!ann || !ann.anchor.quote.quote) return;
 				
 				this.app.vault.cachedRead(this.current.file).then((content) => {
 					let idx = content.indexOf(ann.anchor.quote.quote);

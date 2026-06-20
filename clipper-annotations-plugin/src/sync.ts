@@ -46,7 +46,33 @@ function decodeComment(note: string): CommentMsg {
 
 // --- annotation <-> highlight mapping ----------------------------------------
 
+// Pull an image src + alt out of an element highlight's stored outerHTML, so an
+// image highlight made in the extension (which may predate the image anchor) can
+// still be rendered + matched by source on the Obsidian side.
+function imageFromContent(content: string | undefined): { src: string; alt?: string } | undefined {
+	if (!content || !/<img[\s>]/i.test(content)) return undefined;
+	const srcM =
+		content.match(/<img[^>]*\ssrc=["']([^"']+)["']/i) ||
+		content.match(/<img[^>]*\sdata-src=["']([^"']+)["']/i) ||
+		content.match(/<img[^>]*\ssrcset=["']([^"',\s]+)/i);
+	if (!srcM?.[1]) return undefined;
+	const altM = content.match(/<img[^>]*\salt=["']([^"']*)["']/i);
+	return { src: srcM[1].trim(), ...(altM?.[1] ? { alt: altM[1] } : {}) };
+}
+
 function annotationToHighlight(a: Annotation): Highlight {
+	if (a.kind === 'image' || a.htype === 'element') {
+		return {
+			id: a.id,
+			type: 'element',
+			color: a.color,
+			updatedAt: a.updatedAt,
+			content: a.content ?? '',
+			xpath: a.anchor.structural?.xpath ?? '',
+			anchor: a.anchor,
+			notes: a.comments.map(encodeComment),
+		};
+	}
 	return {
 		id: a.id,
 		type: 'text',
@@ -59,8 +85,44 @@ function annotationToHighlight(a: Annotation): Highlight {
 	};
 }
 
-function highlightToAnnotation(h: Highlight): Annotation | null {
-	const anchor = h.anchor as AnnotationAnchor | undefined;
+/** Resolve a possibly-relative image src against the note's source URL so it loads in the panel. */
+function absolutize(src: string, baseUrl?: string): string {
+	if (!src) return src;
+	try {
+		return baseUrl ? new URL(src, baseUrl).href : new URL(src).href;
+	} catch {
+		return src;
+	}
+}
+
+function highlightToAnnotation(h: Highlight, baseUrl?: string): Annotation | null {
+	let anchor = h.anchor as AnnotationAnchor | undefined;
+	const content = typeof h.content === 'string' ? h.content : undefined;
+
+	// Image/element highlight: anchored by image source, not text.
+	const isElement = h.type === 'element';
+	const img = anchor?.image ?? imageFromContent(content);
+	if (isElement || img) {
+		if (!img) return null; // an element highlight we can't render as an image — preserve verbatim
+		img.src = absolutize(img.src, baseUrl);
+		if (!anchor) anchor = { quote: { quote: '', prefix: '', suffix: '', occurrence: 0 } };
+		anchor.image = img;
+		const comments = (h.notes ?? []).map(decodeComment);
+		const createdAt = parseInt(h.id, 10) || comments[0]?.createdAt || h.updatedAt || Date.now();
+		return {
+			id: h.id,
+			color: (h.color as HighlightColor) || 'yellow',
+			anchor,
+			comments,
+			createdAt,
+			updatedAt: h.updatedAt ?? createdAt,
+			origin: anchor.structural?.surface ?? 'web',
+			kind: 'image',
+			htype: 'element',
+			content: content ?? `<img src="${img.src}"${img.alt ? ` alt="${img.alt}"` : ''}>`,
+		};
+	}
+
 	if (!anchor || !anchor.quote?.quote) return null; // can't render without a text-quote
 	const comments = (h.notes ?? []).map(decodeComment);
 	const createdAt = parseInt(h.id, 10) || comments[0]?.createdAt || h.updatedAt || Date.now();
@@ -101,7 +163,7 @@ function fromMergedHighlights(hs: HighlightsStorage): { sources: SourceAnnotatio
 		const annotations: Annotation[] = [];
 		const foreignHl: Highlight[] = [];
 		for (const h of entry.highlights) {
-			const ann = highlightToAnnotation(h);
+			const ann = highlightToAnnotation(h, url);
 			if (ann) annotations.push(ann);
 			else foreignHl.push(h);
 		}

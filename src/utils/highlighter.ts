@@ -1,6 +1,6 @@
 import browser from './browser-polyfill';
 import { getElementXPath, getElementByXPath, setElementHTML } from './dom-utils';
-import { createAnchor, locateRange, type AnnotationAnchor } from '../../shared/anchor';
+import { createAnchor, createImageAnchor, resolveImageElement, locateRange, type AnnotationAnchor } from '../../shared/anchor';
 import { capturePageSourceIfNeeded } from './page-source-capture';
 import {
 	handleMouseUp,
@@ -555,15 +555,35 @@ function webAnchorForRange(range: { startContainer: Node; startOffset: number; e
 	}
 }
 
-// Same, for a whole element (element highlights): anchor its text content.
+// The image source + alt for an element highlight, if it is (or wraps) an <img>.
+// Uses the resolved live-DOM src so the anchor is absolute and portable.
+function imageInfoForElement(element: Element): { src: string; alt?: string } | undefined {
+	const img = (element.tagName === 'IMG' ? element : element.querySelector('img')) as HTMLImageElement | null;
+	if (!img) return undefined;
+	const src = img.currentSrc || img.src || img.getAttribute('src') || '';
+	if (!src) return undefined;
+	const alt = img.getAttribute('alt') || undefined;
+	return { src, ...(alt ? { alt } : {}) };
+}
+
+// Same, for a whole element (element highlights): anchor its text content, and —
+// when the element is an image — also stamp the cross-surface image anchor so the
+// highlight can be re-found on the rendered Obsidian note (and vice-versa).
 function webAnchorForElement(element: Element): AnnotationAnchor | undefined {
+	let anchor: AnnotationAnchor | undefined;
 	try {
 		const range = document.createRange();
 		range.selectNodeContents(element);
-		return createAnchor(range, document.body, 'web') ?? undefined;
+		anchor = createAnchor(range, document.body, 'web') ?? undefined;
 	} catch {
-		return undefined;
+		anchor = undefined;
 	}
+	const img = imageInfoForElement(element);
+	if (img) {
+		if (anchor) anchor.image = { src: img.src, ...(img.alt ? { alt: img.alt } : {}) };
+		else anchor = createImageAnchor(img.src, img.alt);
+	}
+	return anchor;
 }
 
 export function highlightElement(element: Element, notes?: string[]): string | undefined {
@@ -1106,9 +1126,18 @@ export function applyHighlights() {
 			planHighlightOverlayRects(document.body, highlight);
 			return;
 		}
-		const container = getElementByXPath(highlight.xpath);
+		// xpath may be empty (e.g. an image highlight created in Obsidian, whose
+		// xpath points into the note's DOM) — guard, since document.evaluate('') throws.
+		const container = highlight.xpath ? getElementByXPath(highlight.xpath) : null;
 		if (container) {
 			planHighlightOverlayRects(container, highlight);
+			return;
+		}
+		// XPath failed/absent — fall back to matching the image by source, mirroring
+		// the text-quote fallback for text highlights.
+		if (highlight.anchor?.image) {
+			const img = resolveImageElement(highlight.anchor, document.body, getPageUrl());
+			if (img) planHighlightOverlayRects(img, highlight);
 		}
 	});
 

@@ -55,12 +55,26 @@ export interface StructuralAnchor {
 	endOffset: number;
 }
 
+/** Locates an image/element annotation by its source across surfaces. */
+export interface ImageAnchor {
+	/** The image's source URL (absolute where possible). The cross-surface bridge. */
+	src: string;
+	/** Alt text, for display + a secondary match when sources differ. */
+	alt?: string;
+}
+
 /** The complete anchor stored on every annotation. */
 export interface AnnotationAnchor {
 	/** Universal — always present. */
 	quote: TextQuoteAnchor;
 	/** Per-surface fast path — optional, may be enriched lazily per surface. */
 	structural?: StructuralAnchor;
+	/**
+	 * For image/element annotations: locate by image source instead of text.
+	 * When present the annotation is an *image* annotation — `quote` is empty and
+	 * resolution goes through {@link resolveImageElement}, not the text path.
+	 */
+	image?: ImageAnchor;
 }
 
 /** Characters of surrounding context captured on each side of a quote. */
@@ -144,6 +158,83 @@ export function findTextQuote(fullText: string, anchor: TextQuoteAnchor): number
 	const equallyGood = matches.filter((m) => m.score === best).sort((a, b) => a.index - b.index);
 	const pick = equallyGood[Math.min(anchor.occurrence, equallyGood.length - 1)] ?? first;
 	return pick.index;
+}
+
+/**
+ * Find the `[start, end)` span of the best match for `anchor` in `fullText`.
+ *
+ * Tries an exact match first (cheap, deterministic — same result as
+ * {@link findTextQuote}), then falls back to a **whitespace-insensitive** match.
+ * That fallback is what lets a quote captured on one surface resolve on another:
+ * Obsidian's rendered Markdown is single-spaced, while a live web page's text
+ * nodes carry raw newlines, indentation, and non-breaking spaces. An exact
+ * `indexOf` fails across that gap; the normalized match succeeds and reports the
+ * real span (so the caller paints the correct length, not `start + quote.length`).
+ *
+ * Returns `null` when the quote can't be located by either path.
+ */
+export function findTextQuoteRange(fullText: string, anchor: TextQuoteAnchor): { start: number; end: number } | null {
+	const exact = findTextQuote(fullText, anchor);
+	if (exact != null) return { start: exact, end: exact + anchor.quote.length };
+	return findWhitespaceInsensitive(fullText, anchor);
+}
+
+/** Collapse each whitespace run to a single space, recording the original index of every output char. */
+function normalizeWithMap(s: string): { norm: string; map: number[] } {
+	let norm = '';
+	const map: number[] = [];
+	let inWs = false;
+	for (let i = 0; i < s.length; i++) {
+		const ch = s[i] as string;
+		if (/\s/.test(ch)) {
+			if (!inWs) {
+				norm += ' ';
+				map.push(i); // collapsed run → its first char's original index
+				inWs = true;
+			}
+		} else {
+			norm += ch;
+			map.push(i);
+			inWs = false;
+		}
+	}
+	return { norm, map };
+}
+
+const collapseWs = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/** Whitespace-insensitive search; disambiguates by collapsed context + occurrence, like the exact path. */
+function findWhitespaceInsensitive(fullText: string, anchor: TextQuoteAnchor): { start: number; end: number } | null {
+	const quoteNorm = collapseWs(anchor.quote);
+	if (!quoteNorm) return null;
+	const { norm, map } = normalizeWithMap(fullText);
+	const prefixNorm = collapseWs(anchor.prefix);
+	const suffixNorm = collapseWs(anchor.suffix);
+
+	const scored: ScoredMatch[] = [];
+	let from = 0;
+	for (;;) {
+		const index = norm.indexOf(quoteNorm, from);
+		if (index === -1) break;
+		const before = norm.slice(Math.max(0, index - prefixNorm.length), index);
+		const after = norm.slice(index + quoteNorm.length, index + quoteNorm.length + suffixNorm.length);
+		scored.push({ index, score: commonSuffixLen(before, prefixNorm) + commonPrefixLen(after, suffixNorm) });
+		from = index + Math.max(1, quoteNorm.length);
+	}
+	scored.sort((a, b) => b.score - a.score || a.index - b.index);
+	const first = scored[0];
+	if (!first) return null;
+	const best = first.score;
+	const equallyGood = scored.filter((m) => m.score === best).sort((a, b) => a.index - b.index);
+	const pick = equallyGood[Math.min(anchor.occurrence, equallyGood.length - 1)] ?? first;
+
+	// Map the normalized span back to original offsets: start of the first matched
+	// char, and one past the last matched char (so interior whitespace differences
+	// are absorbed but no trailing whitespace is included).
+	const start = map[pick.index];
+	const lastChar = map[pick.index + quoteNorm.length - 1];
+	if (start === undefined || lastChar === undefined) return null;
+	return { start, end: lastChar + 1 };
 }
 
 // ---------------------------------------------------------------------------
@@ -357,8 +448,20 @@ export function createAnchor(range: RangeLike, root: Node, surface: AnchorSurfac
  * Resolve `anchor` to a {@link RangeLike} within `root` on the given `surface`.
  * Tries the native structural anchor first, then the universal text-quote
  * anchor. Returns `null` if neither resolves (the annotation is "unplaced").
+ *
+ * When resolving many anchors against the same `root` in a loop, pass the root's
+ * concatenated text as `rootText` (from `buildTextMap(root).text`) so the
+ * text-quote search doesn't re-walk the whole DOM per anchor. This is safe to
+ * cache across `wrapRange` mutations because splitting/wrapping text nodes never
+ * changes the concatenated text — only the segment→node mapping, which
+ * `locateRange` always recomputes fresh.
  */
-export function resolveAnchor(anchor: AnnotationAnchor, root: Node, surface: AnchorSurface): RangeLike | null {
+export function resolveAnchor(
+	anchor: AnnotationAnchor,
+	root: Node,
+	surface: AnchorSurface,
+	rootText?: string,
+): RangeLike | null {
 	// 1. Structural fast path, only when captured on this surface.
 	const s = anchor.structural;
 	if (s && s.surface === surface) {
@@ -372,11 +475,76 @@ export function resolveAnchor(anchor: AnnotationAnchor, root: Node, surface: Anc
 			// XPath resolved but text drifted — fall through to text-quote.
 		}
 	}
-	// 2. Universal text-quote fallback.
-	const map = buildTextMap(root);
-	const start = findTextQuote(map.text, anchor.quote);
-	if (start == null) return null;
-	return locateRange(root, start, start + anchor.quote.quote.length);
+	// 2. Universal text-quote fallback (whitespace-insensitive — see findTextQuoteRange).
+	const text = rootText ?? buildTextMap(root).text;
+	const span = findTextQuoteRange(text, anchor.quote);
+	if (!span) return null;
+	return locateRange(root, span.start, span.end);
+}
+
+// ---------------------------------------------------------------------------
+// Image anchoring (match an <img> by source — the cross-surface bridge for
+// image/element annotations, analogous to the text-quote anchor for text)
+// ---------------------------------------------------------------------------
+
+/** Build an image annotation anchor (empty text-quote + image source). */
+export function createImageAnchor(src: string, alt?: string): AnnotationAnchor {
+	return {
+		quote: { quote: '', prefix: '', suffix: '', occurrence: 0 },
+		image: { src, ...(alt ? { alt } : {}) },
+	};
+}
+
+/** Resolve `src` to an absolute URL against `baseUrl` when possible; otherwise return it as-is. */
+function absolutizeSrc(src: string, baseUrl?: string): string {
+	if (!src) return '';
+	try {
+		return baseUrl ? new URL(src, baseUrl).href : new URL(src).href;
+	} catch {
+		return src;
+	}
+}
+
+/** Last path segment without query/hash — a forgiving fallback when full URLs differ (CDN/proxy). */
+function srcFilename(src: string): string {
+	const noQuery = src.split(/[?#]/)[0] ?? src;
+	return (noQuery.split('/').pop() ?? '').toLowerCase();
+}
+
+/** True when two image sources refer to the same image (exact, host+path, then filename). */
+export function imageSrcMatches(a: string, b: string): boolean {
+	if (!a || !b) return false;
+	if (a === b) return true;
+	try {
+		const ua = new URL(a);
+		const ub = new URL(b);
+		if (ua.href === ub.href) return true;
+		if (ua.host === ub.host && ua.pathname === ub.pathname) return true;
+	} catch {
+		/* one side not a full URL — fall through to filename compare */
+	}
+	const fa = srcFilename(a);
+	return fa.length > 0 && fa === srcFilename(b);
+}
+
+/**
+ * Find the `<img>` within `root` whose source matches the anchor's image, on any
+ * surface. `baseUrl` (the note/page URL) resolves relative sources so a relative
+ * embed and an absolute live-page src still match. Returns null when no image matches.
+ */
+export function resolveImageElement(anchor: AnnotationAnchor, root: Node, baseUrl?: string): Element | null {
+	const want = anchor.image?.src;
+	if (!want) return null;
+	const parent = root as unknown as { querySelectorAll?: (sel: string) => ArrayLike<Element> };
+	if (typeof parent.querySelectorAll !== 'function') return null;
+	const wantAbs = absolutizeSrc(want, baseUrl);
+	const imgs = Array.from(parent.querySelectorAll('img'));
+	for (const img of imgs) {
+		const raw = img.getAttribute('src') || (img as unknown as { src?: string }).src || '';
+		if (!raw) continue;
+		if (imageSrcMatches(want, raw) || imageSrcMatches(wantAbs, absolutizeSrc(raw, baseUrl))) return img;
+	}
+	return null;
 }
 
 function commonAncestorElement(range: RangeLike): Element | null {

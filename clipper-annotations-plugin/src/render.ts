@@ -8,11 +8,13 @@
  * them rather than silently dropping them.
  */
 
-import { resolveAnchor, toDomRange } from '../../shared/anchor';
+import { resolveAnchor, resolveImageElement, toDomRange, buildTextMap } from '../../shared/anchor';
 import type { Annotation } from './store';
 
 export const HL_CLASS = 'oc-hl';
+export const HL_IMG_CLASS = 'oc-img-hl';
 export const HL_ACTIVE_CLASS = 'oc-hl-active';
+const COLOR_CLASSES = ['oc-hl-yellow', 'oc-hl-red', 'oc-hl-green'];
 
 export interface PaintHandlers {
 	onHover: (id: string | null) => void;
@@ -24,7 +26,7 @@ export interface PaintResult {
 	unplaced: Annotation[];
 }
 
-/** Unwrap every highlight span under `root`, restoring the original text. */
+/** Unwrap every highlight span under `root` and clear image outlines. */
 export function clearHighlights(root: HTMLElement): void {
 	const spans = Array.from(root.querySelectorAll(`span.${HL_CLASS}`));
 	for (const span of spans) {
@@ -34,36 +36,66 @@ export function clearHighlights(root: HTMLElement): void {
 		parent.removeChild(span);
 		parent.normalize();
 	}
+	for (const img of Array.from(root.querySelectorAll(`.${HL_IMG_CLASS}`))) {
+		img.classList.remove(HL_IMG_CLASS, HL_ACTIVE_CLASS, 'oc-hl-has-comment', ...COLOR_CLASSES);
+		delete (img as HTMLElement).dataset.annId;
+	}
 }
 
-/** Re-resolve and re-wrap all annotations against `root`. */
-export function repaintHighlights(root: HTMLElement, anns: Annotation[], handlers: PaintHandlers): PaintResult {
+/** Re-resolve and re-paint all annotations against `root`. `baseUrl` resolves relative image sources. */
+export function repaintHighlights(
+	root: HTMLElement,
+	anns: Annotation[],
+	handlers: PaintHandlers,
+	baseUrl?: string,
+): PaintResult {
 	clearHighlights(root);
 	const placed: string[] = [];
 	const unplaced: Annotation[] = [];
 	const doc = root.ownerDocument;
+	// Walk the preview text once and reuse it for every anchor's text-quote search
+	// (wrapping below never changes the concatenated text — see resolveAnchor).
+	const rootText = buildTextMap(root).text;
 
 	for (const ann of anns) {
-		const rl = resolveAnchor(ann.anchor, root, 'obsidian');
-		if (!rl) {
-			unplaced.push(ann);
-			continue;
-		}
-		let spans: HTMLElement[] = [];
+		// One annotation must never break the whole paint — isolate each.
 		try {
+			// Image annotation: outline the matching <img> rather than wrapping text.
+			if (ann.anchor.image) {
+				const img = resolveImageElement(ann.anchor, root, baseUrl);
+				if (img) {
+					markImage(img as HTMLElement, ann);
+					placed.push(ann.id);
+				} else {
+					unplaced.push(ann);
+				}
+				continue;
+			}
+			const rl = resolveAnchor(ann.anchor, root, 'obsidian', rootText);
+			if (!rl) {
+				unplaced.push(ann);
+				continue;
+			}
 			const range = toDomRange(rl, doc);
-			spans = wrapRange(range);
+			const spans = wrapRange(range);
+			if (!spans.length) {
+				unplaced.push(ann);
+				continue;
+			}
+			for (const span of spans) decorate(span, ann, handlers);
+			placed.push(ann.id);
 		} catch {
-			spans = [];
-		}
-		if (!spans.length) {
 			unplaced.push(ann);
-			continue;
 		}
-		for (const span of spans) decorate(span, ann, handlers);
-		placed.push(ann.id);
 	}
 	return { placed, unplaced };
+}
+
+/** Outline an embedded image as a highlight. Idempotent; click/hover handled by delegation in main.ts. */
+function markImage(img: HTMLElement, ann: Annotation): void {
+	img.classList.add(HL_IMG_CLASS, `oc-hl-${ann.color}`);
+	if (ann.comments.length) img.classList.add('oc-hl-has-comment');
+	img.dataset.annId = ann.id;
 }
 
 function decorate(span: HTMLElement, ann: Annotation, handlers: PaintHandlers): void {
@@ -80,16 +112,20 @@ function decorate(span: HTMLElement, ann: Annotation, handlers: PaintHandlers): 
 	});
 }
 
-/** Toggle the active emphasis on every span belonging to `id` (null clears all). */
+/** Toggle the active emphasis on every span/image belonging to `id` (null clears all). */
 export function setActiveHighlight(root: HTMLElement, id: string | null): void {
-	root.querySelectorAll(`span.${HL_CLASS}.${HL_ACTIVE_CLASS}`).forEach((el) => el.classList.remove(HL_ACTIVE_CLASS));
+	root.querySelectorAll(`.${HL_ACTIVE_CLASS}`).forEach((el) => el.classList.remove(HL_ACTIVE_CLASS));
 	if (!id) return;
-	root.querySelectorAll(`span.${HL_CLASS}[data-ann-id="${cssEscape(id)}"]`).forEach((el) => el.classList.add(HL_ACTIVE_CLASS));
+	root
+		.querySelectorAll(`span.${HL_CLASS}[data-ann-id="${cssEscape(id)}"], .${HL_IMG_CLASS}[data-ann-id="${cssEscape(id)}"]`)
+		.forEach((el) => el.classList.add(HL_ACTIVE_CLASS));
 }
 
-/** Scroll the first span of `id` into view within the reading pane. */
+/** Scroll the first span/image of `id` into view within the reading pane. */
 export function scrollToHighlight(root: HTMLElement, id: string): void {
-	const el = root.querySelector(`span.${HL_CLASS}[data-ann-id="${cssEscape(id)}"]`);
+	const el = root.querySelector(
+		`span.${HL_CLASS}[data-ann-id="${cssEscape(id)}"], .${HL_IMG_CLASS}[data-ann-id="${cssEscape(id)}"]`,
+	);
 	if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 

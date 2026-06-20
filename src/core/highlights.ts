@@ -1277,6 +1277,27 @@ function unitKey(entries: HighlightEntry[]): string {
 	return entries.map(e => e.data.id).join(',');
 }
 
+// Make image highlights actually display: prefer the resolved anchor image src
+// (captured at creation), else recover the real URL from data-src/srcset when the
+// stored `src` is empty or a lazy-load placeholder. Also drop hotlink referers.
+function fixHighlightImages(root: HTMLElement, entries: HighlightEntry[]): void {
+	const imgs = Array.from(root.querySelectorAll('img'));
+	if (!imgs.length) return;
+	const anchorSrc = entries.map(e => e.data.anchor?.image?.src).find(Boolean);
+	for (const img of imgs) {
+		const src = img.getAttribute('src') || '';
+		const dataSrc = img.getAttribute('data-src') || '';
+		const srcset = img.getAttribute('srcset') || '';
+		const isPlaceholder = !src || src.startsWith('data:');
+		let resolved = anchorSrc || '';
+		if (!resolved && isPlaceholder) resolved = dataSrc || srcset.split(',')[0]?.trim().split(/\s+/)[0] || '';
+		if (resolved) img.setAttribute('src', resolved);
+		img.setAttribute('referrerpolicy', 'no-referrer');
+		img.removeAttribute('loading');
+		img.removeAttribute('srcset');
+	}
+}
+
 function createHighlightItem(entries: HighlightEntry[], pageUrl: string): HTMLElement {
 	// Route video annotation entries to their dedicated card renderer.
 	const carrier = entries[0]?.data as unknown as VideoCarrier;
@@ -1301,6 +1322,10 @@ function createHighlightItem(entries: HighlightEntry[], pageUrl: string): HTMLEl
 	// A grouped selection may include stored <li> fragments; wrap consecutive
 	// orphan <li>s in a <ul> so the list renders with its bullets intact.
 	wrapOrphanListItems(content);
+	// Image highlights store the raw <img> outerHTML, whose `src` is often a
+	// lazy-load placeholder (real URL in data-src/srcset). Prefer the resolved
+	// anchor image source captured at creation so the picture actually shows.
+	fixHighlightImages(content, entries);
 	if (searchQueryHighlights) highlightTextNodes(content, searchQueryHighlights);
 	item.appendChild(content);
 
