@@ -1,0 +1,468 @@
+/**
+ * Clipper Annotations — plugin entry / orchestrator.
+ *
+ * Ties together the four pieces:
+ *   - {@link AnnotationStore}     persistence keyed by normalized source URL
+ *   - {@link repaintHighlights}   reading-view painter (anchor → spans)
+ *   - {@link SwatchPopup}         selection color-swatch popup
+ *   - {@link CommentsView}        docked, linked comments panel
+ *
+ * It owns the "current source note" state, schedules repaints, and implements
+ * the {@link CommentsController} the panel calls back into.
+ */
+
+import { debounce, MarkdownView, Modal, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { createAnchor, type RangeLike } from '../../shared/anchor';
+import { emptySyncFile, type HighlightsStorage, type SyncFile } from '../../shared/merge';
+import { AnnotationStore, normalizeUrl, type Annotation, type HighlightColor } from './store';
+import { repaintHighlights, setActiveHighlight, scrollToHighlight, clearHighlights, type PaintResult } from './render';
+import { SwatchPopup } from './swatch';
+import { COMMENTS_VIEW_TYPE, CommentsView, type CommentsContext, type CommentsController } from './comments-view';
+import { ClipperSettingTab, DEFAULT_SETTINGS, type ClipperAnnotationSettings } from './settings';
+import { DriveClient, ConflictError, type AuthCodeRequest, type DriveAuthStore, type DriveTokens } from './drive';
+import { reconcile } from './sync';
+
+interface CurrentSource {
+	file: TFile;
+	url: string;
+	title?: string;
+	root: HTMLElement;
+}
+
+interface PendingSelection {
+	range: RangeLike;
+	root: HTMLElement;
+	url: string;
+	title?: string;
+}
+
+export default class ClipperAnnotationsPlugin extends Plugin {
+	settings!: ClipperAnnotationSettings;
+	private store!: AnnotationStore;
+	private swatch!: SwatchPopup;
+
+	// Drive sync state (persisted alongside the store in one data.json).
+	private driveTokens: DriveTokens | null = null;
+	private syncSnapshot: SyncFile = emptySyncFile();
+	private foreign: HighlightsStorage = {};
+
+	private current: CurrentSource | null = null;
+	private lastPaint: PaintResult | null = null;
+	private pending: PendingSelection | null = null;
+	private repaintTimer: number | null = null;
+	private syncing = false;
+	private syncPushDebouncer = debounce(() => void this.syncNow(false), 5000, true);
+
+	async onload(): Promise<void> {
+		const blob = ((await this.loadData()) as Record<string, unknown>) ?? {};
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, blob.settings as Partial<ClipperAnnotationSettings>);
+		const drive = blob.drive as { tokens?: DriveTokens } | undefined;
+		const sync = blob.sync as { snapshot?: SyncFile; foreign?: HighlightsStorage } | undefined;
+		this.driveTokens = drive?.tokens ?? null;
+		this.syncSnapshot = sync?.snapshot ?? emptySyncFile();
+		this.foreign = sync?.foreign ?? {};
+
+		this.store = new AnnotationStore(blob, () => this.persistAll());
+		this.register(this.store.onChange(() => {
+			this.scheduleRepaint(0);
+			if (!this.syncing) {
+				this.syncPushDebouncer();
+			}
+		}));
+
+		this.swatch = new SwatchPopup(document, {
+			onColor: (color) => this.commitHighlight(color, false),
+			onComment: () => this.commitHighlight(this.settings.defaultColor, true),
+		});
+		this.register(() => this.swatch.destroy());
+
+		this.registerView(COMMENTS_VIEW_TYPE, (leaf) => new CommentsView(leaf, this.controller()));
+
+		this.addRibbonIcon('message-square', 'Clipper comments', () => this.activatePanel());
+		this.addCommand({
+			id: 'open-comments-panel',
+			name: 'Open comments panel',
+			callback: () => this.activatePanel(),
+		});
+		this.addCommand({
+			id: 'highlight-selection',
+			name: 'Highlight selection (default color)',
+			checkCallback: (checking) => {
+				const ok = !!this.selectionInSource();
+				if (ok && !checking) this.commitHighlightFromSelection(this.settings.defaultColor, false);
+				return ok;
+			},
+		});
+		this.addCommand({ id: 'drive-sync-now', name: 'Sync with Google Drive', callback: () => this.syncNow(true) });
+		this.addCommand({ id: 'drive-connect', name: 'Connect Google Drive', callback: () => this.connectDrive() });
+
+		this.addSettingTab(new ClipperSettingTab(this.app, this));
+
+		// Repaint triggers: post-render of any block, leaf changes, and layout settle.
+		this.registerMarkdownPostProcessor((el) => {
+			if (el.closest('.oc-comments')) return;
+			this.scheduleRepaint();
+		});
+		this.registerEvent(this.app.workspace.on('active-leaf-change', () => this.scheduleRepaint()));
+		this.registerEvent(this.app.workspace.on('layout-change', () => this.scheduleRepaint()));
+		this.app.workspace.onLayoutReady(() => this.scheduleRepaint());
+
+		// Auto-sync with Drive so extension-made highlights show without a manual
+		// pull: once on startup, on a light interval, and whenever the window
+		// regains focus. All coalesced + non-interactive (never pops OAuth UI).
+		this.app.workspace.onLayoutReady(() => void this.syncNow(false));
+		this.registerInterval(window.setInterval(() => void this.syncNow(false), 60_000));
+		this.registerDomEvent(window, 'focus', () => void this.syncNow(false));
+
+		// Show the swatch when the user finishes a selection inside a clipped note.
+		this.registerDomEvent(document, 'mouseup', () => window.setTimeout(() => this.onSelectionEnd(), 0));
+		this.registerDomEvent(document, 'mousedown', (e) => {
+			const t = e.target as HTMLElement;
+			if (this.swatch.visible && !t.closest('.oc-swatch')) this.swatch.hide();
+		});
+	}
+
+	onunload(): void {
+		if (this.current) clearHighlights(this.current.root);
+	}
+
+	// --- settings + unified persistence ----------------------------------
+
+	/** Single writer for data.json: store blob + settings + Drive tokens + sync state. */
+	private async persistAll(): Promise<void> {
+		await this.saveData({
+			...this.store.raw(),
+			settings: this.settings,
+			drive: { tokens: this.driveTokens },
+			sync: { snapshot: this.syncSnapshot, foreign: this.foreign },
+		});
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.persistAll();
+	}
+
+	// --- Drive sync -------------------------------------------------------
+
+	private driveAuth(): DriveAuthStore {
+		return {
+			getTokens: () => this.driveTokens,
+			setTokens: async (t) => {
+				this.driveTokens = t;
+				await this.persistAll();
+			},
+		};
+	}
+
+	private driveClient(): DriveClient {
+		return new DriveClient(this.settings.driveClientId, this.settings.driveClientSecret, this.driveAuth());
+	}
+
+	driveConnected(): boolean {
+		return this.driveClient().isConnected();
+	}
+
+	async connectDrive(): Promise<void> {
+		const drive = this.driveClient();
+		if (!drive.isConfigured()) {
+			new Notice('Add your Google OAuth client id in settings first.');
+			return;
+		}
+		try {
+			const req = await drive.requestAuthCode();
+			const modal = new AuthCodeModal(this.app, req.authUrl, async (code) => {
+				try {
+					await drive.exchangeCode(code, req.codeVerifier);
+					new Notice('Connected to Google Drive.');
+					await this.syncNow(true);
+				} catch (err) {
+					new Notice(`Drive connect failed: ${err instanceof Error ? err.message : String(err)}`);
+				}
+			});
+			modal.open();
+		} catch (err) {
+			new Notice(`Drive connect failed: ${err instanceof Error ? err.message : String(err)}`);
+		}
+	}
+
+	async disconnectDrive(): Promise<void> {
+		await this.driveClient().disconnect();
+		new Notice('Disconnected from Google Drive.');
+	}
+
+	async syncNow(interactive = false): Promise<void> {
+		const drive = this.driveClient();
+		if (!drive.isConfigured() || !drive.isConnected()) {
+			if (interactive) new Notice('Connect Google Drive first (Settings → Clipper Annotations).');
+			return;
+		}
+		if (this.syncing) return; // coalesce overlapping interval/focus/manual triggers
+		this.syncing = true;
+		try {
+			// Compare-and-swap: pull → merge → push only if the remote hasn't moved
+			// since the pull; otherwise re-pull and re-merge. Bounded retry.
+			for (let attempt = 0; attempt < 4; attempt++) {
+				const { file: remote, fileId, revision } = await drive.pull();
+				const out = reconcile({
+					snapshot: this.syncSnapshot,
+					remote,
+					sources: this.store.allSources(),
+					foreign: this.foreign,
+					now: Date.now(),
+				});
+				try {
+					await drive.push(out.merged, fileId, revision);
+				} catch (err) {
+					if (err instanceof ConflictError && attempt < 3) continue; // remote changed — redo
+					throw err;
+				}
+				this.syncSnapshot = out.merged;
+				this.foreign = out.foreign;
+				await this.store.replaceAll(out.sources); // persists everything via persistAll
+				this.repaint();
+				if (interactive) new Notice('Synced with Google Drive.');
+				return;
+			}
+		} catch (err) {
+			if (interactive) new Notice(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
+		} finally {
+			this.syncing = false;
+		}
+	}
+
+	// --- current source detection ----------------------------------------
+
+	private sourceUrlFor(file: TFile): string | null {
+		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
+		if (!fm) return null;
+		const keys = this.settings.sourceKeys.split(',').map((k) => k.trim()).filter(Boolean);
+		for (const k of keys) {
+			const v = fm[k];
+			if (typeof v === 'string' && /^https?:\/\//i.test(v)) return normalizeUrl(v);
+		}
+		return null;
+	}
+
+	private activeReadingView(): { view: MarkdownView; root: HTMLElement } | null {
+		const file = this.app.workspace.getActiveFile();
+		if (!file) return null;
+		const leaves = this.app.workspace.getLeavesOfType('markdown');
+		const leaf = leaves.find((l) => (l.view as MarkdownView).file === file);
+		const view = leaf?.view as MarkdownView | undefined;
+		if (!view || view.getMode() !== 'preview') return null;
+		const root = view.contentEl.querySelector<HTMLElement>('.markdown-preview-view');
+		return root ? { view, root } : null;
+	}
+
+	private refreshCurrent(): void {
+		const rv = this.activeReadingView();
+		if (!rv || !(rv.view.file instanceof TFile)) {
+			this.current = null;
+			return;
+		}
+		const url = this.sourceUrlFor(rv.view.file);
+		if (!url) {
+			this.current = null;
+			return;
+		}
+		const title = this.app.metadataCache.getFileCache(rv.view.file)?.frontmatter?.title ?? rv.view.file.basename;
+		this.current = { file: rv.view.file, url, title, root: rv.root };
+	}
+
+	// --- repaint ----------------------------------------------------------
+
+	private scheduleRepaint(delay = 120): void {
+		if (this.repaintTimer != null) window.clearTimeout(this.repaintTimer);
+		this.repaintTimer = window.setTimeout(() => {
+			this.repaintTimer = null;
+			this.repaint();
+		}, delay);
+	}
+
+	private repaint(): void {
+		this.refreshCurrent();
+		if (!this.current) {
+			this.lastPaint = null;
+			this.view()?.refresh();
+			return;
+		}
+		const anns = this.store.for(this.current.url);
+		this.lastPaint = repaintHighlights(this.current.root, anns, {
+			onHover: (id) => {
+				setActiveHighlight(this.current!.root, id);
+				this.view()?.setActive(id);
+			},
+			onActivate: (id) => {
+				void this.activatePanel().then(() => this.view()?.focusAnnotation(id));
+			},
+		});
+		if (this.settings.autoOpenPanel && anns.length) void this.activatePanel(false);
+		this.view()?.refresh();
+	}
+
+	// --- selection → swatch ----------------------------------------------
+
+	private selectionInSource(): { range: RangeLike; root: HTMLElement; url: string; title?: string } | null {
+		this.refreshCurrent();
+		if (!this.current) return null;
+		const sel = window.getSelection();
+		if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+		const range = sel.getRangeAt(0);
+		if (!this.current.root.contains(range.commonAncestorContainer)) return null;
+		if (!range.toString().trim()) return null;
+		return { range, root: this.current.root, url: this.current.url, title: this.current.title };
+	}
+
+	private onSelectionEnd(): void {
+		const sel = this.selectionInSource();
+		if (!sel) {
+			if (this.swatch.visible) this.swatch.hide();
+			return;
+		}
+		this.pending = sel;
+		const rect = (sel.range as Range).getBoundingClientRect();
+		this.swatch.showFor(rect);
+	}
+
+	private commitHighlight(color: HighlightColor, openComment: boolean): void {
+		if (!this.pending) return;
+		void this.create(this.pending, color, openComment);
+	}
+
+	private commitHighlightFromSelection(color: HighlightColor, openComment: boolean): void {
+		const sel = this.selectionInSource();
+		if (sel) void this.create(sel, color, openComment);
+	}
+
+	private async create(sel: PendingSelection, color: HighlightColor, openComment: boolean): Promise<void> {
+		const anchor = createAnchor(sel.range, sel.root, 'obsidian');
+		this.swatch.hide();
+		window.getSelection()?.removeAllRanges();
+		this.pending = null;
+		if (!anchor) return;
+		const ann = await this.store.addHighlight(sel.url, anchor, color, Date.now(), sel.title);
+		this.repaint();
+		if (openComment) {
+			await this.activatePanel();
+			this.view()?.focusAnnotation(ann.id);
+		}
+	}
+
+	// --- comments panel ---------------------------------------------------
+
+	private view(): CommentsView | null {
+		const leaf = this.app.workspace.getLeavesOfType(COMMENTS_VIEW_TYPE)[0];
+		return (leaf?.view as CommentsView) ?? null;
+	}
+
+	private async activatePanel(reveal = true): Promise<void> {
+		let leaf: WorkspaceLeaf | null = this.app.workspace.getLeavesOfType(COMMENTS_VIEW_TYPE)[0] ?? null;
+		if (!leaf) {
+			leaf = this.app.workspace.getRightLeaf(false);
+			if (leaf) await leaf.setViewState({ type: COMMENTS_VIEW_TYPE, active: false });
+		}
+		if (leaf && reveal) this.app.workspace.revealLeaf(leaf);
+	}
+
+	private controller(): CommentsController {
+		return {
+			getContext: (): CommentsContext | null => {
+				if (!this.current) return null;
+				const all = this.store.for(this.current.url);
+				return { url: this.current.url, title: this.current.title, annotations: all, unplaced: [] };
+			},
+			addComment: async (id, text) => {
+				if (this.current) await this.store.addComment(this.current.url, id, text, Date.now());
+			},
+			setColor: async (id, color) => {
+				if (this.current) await this.store.setColor(this.current.url, id, color, Date.now());
+			},
+			deleteAnnotation: async (id) => {
+				if (this.current) await this.store.deleteAnnotation(this.current.url, id);
+			},
+			emphasizeInSource: (id) => {
+				if (this.current) setActiveHighlight(this.current.root, id);
+			},
+			revealInSource: (id) => {
+				if (!this.current) return;
+				const escapedId = id.replace(/["\\]/g, '\\$&');
+				const el = this.current.root.querySelector(`span.oc-hl[data-ann-id="${escapedId}"]`);
+				if (el) {
+					el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+					return;
+				}
+				// If virtualized off-screen, scroll to the corresponding line.
+				const ann = this.store.for(this.current.url).find((a) => a.id === id);
+				if (!ann) return;
+				
+				this.app.vault.cachedRead(this.current.file).then((content) => {
+					let idx = content.indexOf(ann.anchor.quote.quote);
+					if (idx === -1) idx = content.indexOf(ann.anchor.quote.quote.substring(0, 15));
+					
+					if (idx !== -1) {
+						const line = content.substring(0, idx).split('\n').length - 1;
+						const leaves = this.app.workspace.getLeavesOfType('markdown');
+						const leaf = leaves.find((l) => (l.view as import('obsidian').MarkdownView).file === this.current!.file);
+						if (leaf) leaf.setEphemeralState({ line });
+					}
+				});
+			},
+		};
+	}
+}
+
+/** Asks the user to paste the redirect URL or auth code. */
+class AuthCodeModal extends Modal {
+	private authUrl: string;
+	private onSubmit: (code: string) => void;
+
+	constructor(app: import('obsidian').App, authUrl: string, onSubmit: (code: string) => void) {
+		super(app);
+		this.authUrl = authUrl;
+		this.onSubmit = onSubmit;
+	}
+
+	onOpen(): void {
+		const { contentEl } = this;
+		contentEl.createEl('h3', { text: 'Connect Google Drive' });
+		
+		const p1 = contentEl.createEl('p', { text: '1. Open this authorization link in your browser:' });
+		p1.style.marginBottom = '4px';
+		const link = contentEl.createEl('a', { text: 'Click here to authorize with Google', href: this.authUrl, attr: { target: '_blank' } });
+		link.style.display = 'block';
+		link.style.marginBottom = '16px';
+
+		const p2 = contentEl.createEl('p', { text: '2. After you approve, your browser will redirect to a page that says "Site can\'t be reached" (127.0.0.1). That is normal!' });
+		p2.style.marginBottom = '8px';
+
+		const p3 = contentEl.createEl('p', { text: '3. Copy the ENTIRE URL from your browser\'s address bar and paste it below:' });
+		p3.style.marginBottom = '8px';
+
+		const input = contentEl.createEl('input', { type: 'text', placeholder: 'http://127.0.0.1/?code=4/0A...' });
+		input.style.width = '100%';
+		input.style.marginBottom = '16px';
+
+		const btn = contentEl.createEl('button', { text: 'Connect', cls: 'mod-cta' });
+		btn.onclick = () => {
+			const val = input.value.trim();
+			let code = val;
+			try {
+				if (val.startsWith('http')) {
+					const url = new URL(val);
+					code = url.searchParams.get('code') || val;
+				}
+			} catch { /* ignore */ }
+			
+			if (!code) return;
+			this.onSubmit(code);
+			this.close();
+		};
+	}
+
+	onClose(): void {
+		this.contentEl.empty();
+	}
+}
+
+// Re-export so esbuild keeps the symbol referenced from the view module.
+export type { Annotation };

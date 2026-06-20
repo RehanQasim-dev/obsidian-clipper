@@ -1,0 +1,9 @@
+{
+	"id": "clipper-annotations",
+	"name": "Clipper Annotations",
+	"version": "0.1.0",
+	"minAppVersion": "1.4.0",
+	"description": "Highlight and comment on clipped source notes in reading view, with a linked comments panel. Shares an anchoring model with the Obsidian Web Clipper extension so annotations round-trip between live web pages and notes.",
+	"author": "Rehan Qasim",
+	"isDesktopOnly": false
+}

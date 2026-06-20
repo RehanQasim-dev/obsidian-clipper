@@ -235,7 +235,7 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 
 ## 5. Cross-surface anchoring & the Obsidian companion plugin
 
-A separate **Obsidian plugin** (`obsidian-sample-plugin/`, id `clipper-annotations`, esbuild →
+A separate **Obsidian plugin** (`clipper-annotations-plugin/`, id `clipper-annotations`, esbuild →
 `main.js`) lets you highlight/comment on clipped **source notes in reading view**, with a docked,
 linked comments panel — the same swatch popup, colors, and in-context keys (`1`/`2`/`3`, `c`, `Esc`)
 as the live-page highlighter, but comments live in a separate panel. It is a **distinct codebase**;
