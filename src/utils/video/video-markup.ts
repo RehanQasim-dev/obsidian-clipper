@@ -12,6 +12,7 @@ export const VIDEO_COLOR_HEX: Record<VideoColor, string> = {
 	yellow: '#facc15',
 	red: '#fb7185',
 	green: '#4ac582',
+	black: '#000000',
 };
 
 // Smoothed path through normalized points, denormalized to the W×H box.
@@ -42,14 +43,19 @@ export function renderMarkupSvg(markup: VideoMarkup | undefined, W: number, H: n
 	if (!markup) return svg;
 
 	// Stroke weight scales with the frame so it reads the same at any display size.
-	const weight = Math.max(2, W * 0.004);
+	const getWeight = (w?: string) => {
+		const baseWeight = Math.max(2, W * 0.004);
+		if (w === 'thin') return baseWeight * 0.5;
+		if (w === 'thick') return baseWeight * 2;
+		return baseWeight;
+	};
 
 	for (const s of markup.strokes) {
 		const p = document.createElementNS(SVG_NS, 'path');
 		p.setAttribute('d', strokePath(s.points, W, H));
 		p.setAttribute('fill', 'none');
 		p.setAttribute('stroke', VIDEO_COLOR_HEX[s.color]);
-		p.setAttribute('stroke-width', String(weight));
+		p.setAttribute('stroke-width', String(getWeight(s.weight)));
 		p.setAttribute('stroke-linecap', 'round');
 		p.setAttribute('stroke-linejoin', 'round');
 		p.setAttribute('data-mid', s.id);
@@ -64,7 +70,7 @@ export function renderMarkupSvg(markup: VideoMarkup | undefined, W: number, H: n
 		ln.setAttribute('x2', String(l.x2 * W));
 		ln.setAttribute('y2', String(l.y2 * H));
 		ln.setAttribute('stroke', VIDEO_COLOR_HEX[l.color]);
-		ln.setAttribute('stroke-width', String(weight));
+		ln.setAttribute('stroke-width', String(getWeight(l.weight)));
 		ln.setAttribute('stroke-linecap', 'round');
 		ln.setAttribute('data-mid', l.id);
 		if (l.id === selectedId) ln.classList.add('is-selected');
@@ -74,7 +80,6 @@ export function renderMarkupSvg(markup: VideoMarkup | undefined, W: number, H: n
 	// Text labels render in a fixed-width box that wraps. A <foreignObject> holding
 	// an HTML div gives natural word-wrapping (plain SVG <text> can't wrap), and
 	// matches what the user typed in the live textarea.
-	const fontSize = Math.max(11, H * 0.034);
 	for (const t of markup.texts) {
 		const boxW = (t.w && t.w > 0 ? t.w : 0.28) * W;
 		const fo = document.createElementNS(SVG_NS, 'foreignObject');
@@ -85,11 +90,13 @@ export function renderMarkupSvg(markup: VideoMarkup | undefined, W: number, H: n
 		fo.setAttribute('data-mid', t.id);
 		const div = document.createElement('div');
 		div.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
-		div.style.cssText = `display:inline-block;max-width:${boxW}px;`
+		const fontSize = Math.max(11, H * 0.034) * (t.size ?? 1);
+		div.style.cssText = `display:inline-block;width:${boxW}px;`
 			+ `font:600 ${fontSize}px system-ui,sans-serif;line-height:1.3;`
 			+ `color:${VIDEO_COLOR_HEX[t.color]};white-space:pre-wrap;`
 			+ `overflow-wrap:break-word;word-break:break-word;`
-			+ `text-shadow:0 1px 2px rgba(0,0,0,0.7);`
+			+ `margin:0;padding:2px;box-sizing:border-box;`
+			+ (t.color === 'black' ? `text-shadow:0 1px 2px rgba(255,255,255,0.7), 0 0 4px rgba(255,255,255,0.5);` : `text-shadow:0 1px 2px rgba(0,0,0,0.7);`)
 			+ (t.id === selectedId ? `outline:2px dashed rgba(255,255,255,0.9);outline-offset:2px;` : '');
 		div.textContent = t.text;
 		fo.appendChild(div);

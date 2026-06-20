@@ -123,6 +123,7 @@ $ob-vid-accent: #897cf2;
 	&.yellow { stroke: #facc15; }
 	&.red { stroke: #fb7185; }
 	&.green { stroke: #4ac582; }
+	&.black { stroke: #000000; }
 }
 
 .ob-vid-textinput {
@@ -144,6 +145,11 @@ $ob-vid-accent: #897cf2;
 	&.yellow { color: #facc15; }
 	&.red { color: #fb7185; }
 	&.green { color: #4ac582; }
+	&.black { 
+		color: #000000; 
+		background: rgba(255, 255, 255, 0.7);
+		border: 1px solid rgba(0, 0, 0, 0.3);
+	}
 }
 
 // Toolbar + hint (draw mode only)
@@ -198,6 +204,7 @@ $ob-vid-accent: #897cf2;
 	&.yellow { background: #facc15; }
 	&.red { background: #fb7185; }
 	&.green { background: #4ac582; }
+	&.black { background: #000000; }
 	&.is-active { border-color: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4); }
 }
 
@@ -462,6 +469,7 @@ $ob-vid-accent: #897cf2;
 	&.yellow { background: rgba(250, 204, 21, 0.42); }
 	&.red { background: rgba(251, 113, 133, 0.42); }
 	&.green { background: rgba(74, 197, 130, 0.42); }
+	&.black { background: rgba(0, 0, 0, 0.42); }
 }
 
 // Floating selection popup (color swatches + Comment). Positioned within the

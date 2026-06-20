@@ -12,19 +12,23 @@ import { normalizeUrl } from '../highlighter';
 // Markup coords (strokes/lines/text) are stored NORMALIZED to 0..1 of the frame
 // so they repaint correctly over the saved frame at any display size.
 
-export type VideoColor = 'yellow' | 'red' | 'green';
+export type VideoColor = 'yellow' | 'red' | 'green' | 'black';
+
+export type StrokeWidth = 'thin' | 'medium' | 'thick';
 
 export interface VideoStroke {
 	id: string;
 	color: VideoColor;
 	// Flattened normalized points [x0,y0,x1,y1,...], each in 0..1 of the frame.
 	points: number[];
+	weight?: StrokeWidth;
 }
 
 export interface VideoLine {
 	id: string;
 	color: VideoColor;
 	x1: number; y1: number; x2: number; y2: number; // normalized 0..1
+	weight?: StrokeWidth;
 }
 
 export interface VideoText {
@@ -32,6 +36,7 @@ export interface VideoText {
 	color: VideoColor;
 	x: number; y: number; // normalized 0..1, top-left of the label
 	w: number;            // normalized 0..1 box width; text wraps within it
+	size?: number;        // size scale multiplier
 	text: string;
 }
 

@@ -150,10 +150,13 @@ body.obsidian-highlighter-active {
 		background-color: rgba(255, 235, 0, 0.35) !important;
 	}
 	&[data-obsidian-color="red"] *::selection {
-		background-color: rgba(255, 99, 132, 0.35) !important;
+		background-color: rgba(255, 0, 0, 0.45);
 	}
 	&[data-obsidian-color="green"] *::selection {
-		background-color: rgba(75, 192, 120, 0.35) !important;
+		background-color: rgba(0, 255, 0, 0.35);
+	}
+	&[data-obsidian-color="black"] *::selection {
+		background-color: rgba(0, 0, 0, 0.35);
 	}
 	
 	.obsidian-highlight-overlay {
@@ -166,6 +169,9 @@ body.obsidian-highlighter-active {
 		&.color-green {
 			background-color: rgba(75, 192, 120, 0.35);
 		}
+		&.color-black {
+			background-color: rgba(0, 0, 0, 0.35);
+		}
 	}
 }
 
@@ -177,6 +183,9 @@ body.obsidian-highlighter-active {
 }
 ::highlight(obsidian-highlight-green) {
 	background-color: rgba(75, 192, 120, 0.35);
+}
+::highlight(obsidian-highlight-black) {
+	background-color: rgba(0, 0, 0, 0.35);
 }
 
 // Active emphasis (shown while hovering the associated comment box). The
@@ -205,6 +214,13 @@ body.obsidian-highlighter-active {
 	text-decoration-thickness: 2px;
 	text-underline-offset: 1px;
 }
+::highlight(obsidian-highlight-active-black) {
+	background-color: transparent;
+	text-decoration: underline;
+	text-decoration-color: #000000;
+	text-decoration-thickness: 2px;
+	text-underline-offset: 1px;
+}
 
 .obsidian-highlight-color-btn {
 	width: 14px !important;
@@ -224,6 +240,7 @@ body.obsidian-highlighter-active {
 	&.color-yellow { background-color: rgb(255, 235, 0) !important; }
 	&.color-red { background-color: rgb(255, 99, 132) !important; }
 	&.color-green { background-color: rgb(75, 192, 120) !important; }
+	&.color-black { background-color: rgb(50, 50, 50) !important; }
 }
 
 .obsidian-highlighter-menu {

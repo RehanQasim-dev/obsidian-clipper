@@ -504,6 +504,7 @@ h1.highlight-page-title {
 	&[data-color="yellow"] { --hl-color: 250, 204, 21; }
 	&[data-color="red"]    { --hl-color: 251, 113, 133; }
 	&[data-color="green"]  { --hl-color: 74, 197, 130; }
+	&[data-color="black"]  { --hl-color: 0, 0, 0; }
 
 	.image-expand-button {
 		display: none !important;
@@ -733,6 +734,7 @@ h1.highlight-page-title {
 		&.yellow { --tcol: #d4a300; }
 		&.red { --tcol: #e0556b; }
 		&.green { --tcol: #2f9e63; }
+		&.black { --tcol: #000000; }
 	}
 
 	.video-transcript-quote {

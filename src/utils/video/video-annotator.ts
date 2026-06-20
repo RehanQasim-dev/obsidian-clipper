@@ -45,10 +45,19 @@ let videoTitle = '';
 let videoTime = 0;
 let item: VideoItem | null = null;
 
+import { StrokeWidth } from './video-storage';
+
 let currentTool: Tool = 'pencil';
 let currentColor: VideoColor = 'yellow';
+let currentStrokeWidth: StrokeWidth = 'medium';
+let lastFontSizeScale = 1.0;
 let markup: VideoMarkup = emptyMarkup();
 const undoStack: VideoMarkup[] = [];
+
+let linePopup: HTMLElement | null = null;
+function hideLinePopup() {
+	if (linePopup) { linePopup.remove(); linePopup = null; }
+}
 
 // DOM refs
 let root: HTMLElement | null = null;
@@ -111,6 +120,7 @@ function prepareSession() {
 	selectedId = null;
 	currentTool = 'pencil';
 	currentColor = 'yellow';
+	currentStrokeWidth = 'medium';
 	videoTime = video ? video.currentTime : 0;
 	watchUrl = location.href;
 	videoId = getVideoId();
@@ -265,7 +275,19 @@ function buildDrawTools() {
 		b.dataset.tool = t.tool;
 		b.title = t.label;
 		b.textContent = t.icon;
-		b.addEventListener('click', () => setTool(t.tool));
+		b.addEventListener('click', (e) => {
+			if (t.tool === 'line') {
+				if (currentTool === 'line') {
+					toggleLinePopup(b, bar);
+				} else {
+					setTool(t.tool);
+					hideLinePopup();
+				}
+			} else {
+				setTool(t.tool);
+				hideLinePopup();
+			}
+		});
 		bar.appendChild(b);
 	}
 
@@ -273,7 +295,7 @@ function buildDrawTools() {
 	sep.className = 'ob-vid-toolsep';
 	bar.appendChild(sep);
 
-	const colors: VideoColor[] = ['yellow', 'red', 'green'];
+	const colors: VideoColor[] = ['yellow', 'red', 'green', 'black'];
 	for (const c of colors) {
 		const sw = document.createElement('button');
 		sw.type = 'button';
@@ -296,6 +318,42 @@ function setTool(t: Tool) {
 	if (t !== 'select' && selectedId) { selectedId = null; renderCommitted(); }
 }
 
+function toggleLinePopup(anchor: HTMLElement, bar: HTMLElement) {
+	if (linePopup) { hideLinePopup(); return; }
+	linePopup = document.createElement('div');
+	linePopup.className = 'ob-vid-line-popup';
+	Object.assign(linePopup.style, {
+		position: 'absolute',
+		left: `${anchor.offsetLeft}px`,
+		bottom: `calc(100% + 8px)`,
+		display: 'flex', flexDirection: 'column', gap: '4px',
+		background: '#222', padding: '4px', borderRadius: '4px', border: '1px solid #444',
+		zIndex: '10'
+	});
+	const widths: StrokeWidth[] = ['thin', 'medium', 'thick'];
+	const icons = { thin: '—', medium: '━', thick: '█' };
+	for (const w of widths) {
+		const btn = document.createElement('button');
+		btn.type = 'button';
+		btn.className = 'ob-vid-tool' + (w === currentStrokeWidth ? ' is-active' : '');
+		btn.textContent = icons[w];
+		btn.style.fontSize = w === 'thin' ? '12px' : w === 'medium' ? '14px' : '16px';
+		btn.addEventListener('click', (e) => {
+			e.stopPropagation();
+			currentStrokeWidth = w;
+			if (currentTool === 'select' && selectedId) {
+				const l = markup.lines.find(x => x.id === selectedId);
+				if (l) { pushUndoSnapshot(); l.weight = w; renderCommitted(); }
+				const s = markup.strokes.find(x => x.id === selectedId);
+				if (s) { pushUndoSnapshot(); s.weight = w; renderCommitted(); }
+			}
+			hideLinePopup();
+		});
+		linePopup.appendChild(btn);
+	}
+	bar.appendChild(linePopup);
+}
+
 function setColor(c: VideoColor) {
 	currentColor = c;
 	if (root) root.dataset.color = c;
@@ -303,6 +361,12 @@ function setColor(c: VideoColor) {
 		el.classList.toggle('is-active', (el as HTMLElement).dataset.color === c));
 	// In select mode, a swatch also recolors the selected element.
 	if (currentTool === 'select' && selectedId) recolorSelected(c);
+	
+	// Recolor active text input if editing
+	const activeTextInput = root?.querySelector('.ob-vid-textinput') as HTMLTextAreaElement | null;
+	if (activeTextInput) {
+		activeTextInput.className = `ob-vid-textinput ${c}`;
+	}
 }
 
 // --- Drawing -----------------------------------------------------------------
@@ -401,7 +465,12 @@ function translateSelected(dxNorm: number, dyNorm: number) {
 	const l = markup.lines.find(x => x.id === selectedId);
 	if (l) { l.x1 = clamp(l.x1 + dxNorm); l.y1 = clamp(l.y1 + dyNorm); l.x2 = clamp(l.x2 + dxNorm); l.y2 = clamp(l.y2 + dyNorm); return; }
 	const t = markup.texts.find(x => x.id === selectedId);
-	if (t) { t.x = clamp(t.x + dxNorm); t.y = clamp(t.y + dyNorm); }
+	if (t) {
+		t.x = clamp(t.x + dxNorm); 
+		t.y = clamp(t.y + dyNorm);
+		if (t.x + (t.w || 0.28) > 1) t.x = 1 - (t.w || 0.28);
+		if (t.y > 0.9) t.y = 0.9;
+	}
 }
 
 function deleteSelected() {
@@ -569,7 +638,7 @@ function onPointerUp(e: PointerEvent) {
 		pushUndoSnapshot();
 		const pts: number[] = [];
 		for (let i = 0; i < livePts.length; i += 2) { pts.push(nx(livePts[i]), ny(livePts[i + 1])); }
-		markup.strokes.push({ id: genVideoId(), color: currentColor, points: pts });
+		markup.strokes.push({ id: genVideoId(), color: currentColor, points: pts, weight: currentStrokeWidth });
 		renderCommitted();
 	} else if (currentTool === 'line' && lineStart) {
 		const p = toLocal(e);
@@ -580,6 +649,7 @@ function onPointerUp(e: PointerEvent) {
 			markup.lines.push({
 				id: genVideoId(), color: currentColor,
 				x1: nx(lineStart.x), y1: ny(lineStart.y), x2: nx(end.x), y2: ny(end.y),
+				weight: currentStrokeWidth
 			});
 			renderCommitted();
 		}
@@ -614,16 +684,27 @@ function placeTextInput(x: number, y: number, initial = '', boxOverride?: number
 	// A fixed-width box: text wraps to the next line within it (no endless single
 	// line). Default font is a couple of points smaller than before.
 	const boxPx = boxOverride ?? Math.min(Math.max(160, w * 0.28), w * 0.9);
-	const fontPx = Math.max(11, h * 0.034);
+	const fontPx = Math.max(11, h * 0.034) * lastFontSizeScale;
+
+	// Ensure the textbox doesn't go off-screen initially
+	const maxLeft = w - boxPx;
+	const safeX = Math.max(0, Math.min(x, maxLeft));
 
 	const ta = document.createElement('textarea');
 	ta.className = `ob-vid-textinput ${currentColor}`;
 	ta.rows = 1;
 	ta.value = initial;
-	ta.style.left = `${x}px`;
+	ta.style.left = `${safeX}px`;
 	ta.style.top = `${y}px`;
 	ta.style.width = `${boxPx}px`;
 	ta.style.fontSize = `${fontPx}px`;
+	ta.style.fontFamily = 'system-ui, sans-serif';
+	ta.style.fontWeight = '600';
+	ta.style.lineHeight = '1.3';
+	ta.style.padding = '2px';
+	ta.style.margin = '0';
+	ta.style.boxSizing = 'border-box';
+	ta.style.resize = 'horizontal';
 	frameInner!.appendChild(ta);
 
 	const autosize = () => { ta.style.height = 'auto'; ta.style.height = `${ta.scrollHeight}px`; };
@@ -642,12 +723,14 @@ function placeTextInput(x: number, y: number, initial = '', boxOverride?: number
 		if (done) return;
 		done = true;
 		const text = ta.value.trim();
+		const finalBoxPx = ta.offsetWidth;
 		if (text) {
 			if (!editing) pushUndoSnapshot();
+			// Re-read offsetLeft in case user resized from left or container shifted
 			markup.texts.push({
 				id: genVideoId(), color: currentColor,
-				x: x / Math.max(1, w), y: y / Math.max(1, h),
-				w: boxPx / Math.max(1, w), text,
+				x: ta.offsetLeft / Math.max(1, w), y: ta.offsetTop / Math.max(1, h),
+				w: finalBoxPx / Math.max(1, w), size: lastFontSizeScale, text,
 			});
 			renderCommitted();
 		}
@@ -683,6 +766,7 @@ function onDoubleClick(e: MouseEvent) {
 	pushUndoSnapshot();
 	const existing = t.text;
 	const px = t.x * w, py = t.y * h, boxPx = (t.w || 0.28) * w;
+	if (t.size) lastFontSizeScale = t.size;
 	// Remove the old label; placeTextInput will add the edited one.
 	markup.texts.splice(idx, 1);
 	selectedId = null;
@@ -835,6 +919,19 @@ function onKeyDown(e: KeyboardEvent) {
 		if (inText) {
 			// Esc finishes typing: keep the text and return to the select tool.
 			if (e.key === 'Escape') { e.preventDefault(); activeTextCommit?.(); setTool('select'); }
+			else if (e.ctrlKey || e.metaKey) {
+				if (e.key === '[' || e.key === ']') {
+					e.preventDefault();
+					const delta = e.key === ']' ? 0.1 : -0.1;
+					lastFontSizeScale = Math.max(0.5, Math.min(3.0, lastFontSizeScale + delta));
+					const { h } = wrapSize();
+					const fontPx = Math.max(11, h * 0.034) * lastFontSizeScale;
+					t.style.fontSize = `${fontPx}px`;
+					// trigger autosize
+					t.style.height = 'auto'; 
+					t.style.height = `${t.scrollHeight}px`;
+				}
+			}
 			// Enter = newline (let it through).
 		} else { // chat box
 			if (e.key === 'Escape') { e.preventDefault(); teardown(true); }
@@ -857,6 +954,7 @@ function onKeyDown(e: KeyboardEvent) {
 		if (e.key === '1') { e.preventDefault(); setColor('yellow'); return; }
 		if (e.key === '2') { e.preventDefault(); setColor('red'); return; }
 		if (e.key === '3') { e.preventDefault(); setColor('green'); return; }
+		if (e.key === '4') { e.preventDefault(); setColor('black'); return; }
 
 		if (e.key === 'Escape') {
 			e.preventDefault();
