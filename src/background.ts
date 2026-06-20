@@ -664,6 +664,19 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 			return true;
 		}
 
+		if (typedRequest.action === "openPopupWithDiagram") {
+			const diagramId = (typedRequest as any).id;
+			if (diagramId) {
+				browser.windows.create({
+					url: browser.runtime.getURL(`diagram.html?id=${diagramId}`),
+					type: "popup",
+					width: 1200,
+					height: 800
+				}).then(() => sendResponse({success: true})).catch(e => sendResponse({success: false, error: e.message}));
+				return true;
+			}
+		}
+
 		if (typedRequest.action === "toggleReaderMode" && typedRequest.tabId) {
 			const tabId = typedRequest.tabId;
 			// Check if the tab is on the extension's reader.html page

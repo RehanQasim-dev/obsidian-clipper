@@ -404,14 +404,12 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 			// Save a new empty diagram comment, then open the editor
 			const diagramId = 'd' + Math.random().toString(36).substring(2, 9);
 			saveComment(highlight.id, `<!--diagram:${diagramId}-->`);
-			const url = browser.runtime.getURL(`diagram.html?id=${diagramId}`);
-			window.open(url, '_blank', 'width=1200,height=800');
+			browser.runtime.sendMessage({ action: 'openPopupWithDiagram', id: diagramId });
 		} else if (target.closest('.obsidian-comment-diagram-img')) {
 			const img = target.closest('.obsidian-comment-diagram-img') as HTMLImageElement;
 			const diagramId = img.dataset.diagramId;
 			if (diagramId) {
-				const url = browser.runtime.getURL(`diagram.html?id=${diagramId}`);
-				window.open(url, '_blank', 'width=1200,height=800');
+				browser.runtime.sendMessage({ action: 'openPopupWithDiagram', id: diagramId });
 			}
 		} else if (target.closest('.obsidian-comment-text')) {
 			const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
