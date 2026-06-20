@@ -413,6 +413,18 @@ browser.runtime.onStartup.addListener(() => {
 	obsidianFlush().catch(() => {});
 });
 
+let lastDrivePollTime = 0;
+const DRIVE_POLL_COOLDOWN_MS = 5000;
+
+function triggerDrivePollIfNeeded() {
+	if (!isSyncConfigured()) return;
+	const now = Date.now();
+	if (now - lastDrivePollTime > DRIVE_POLL_COOLDOWN_MS) {
+		lastDrivePollTime = now;
+		syncToDrive(false).catch(err => console.warn('Drive sync poll on focus failed:', err));
+	}
+}
+
 browser.runtime.onMessage.addListener((request: unknown, _sender: browser.Runtime.MessageSender, sendResponse: (response?: any) => void): true | undefined => {
 	if (typeof request !== 'object' || request === null) return;
 	const action = (request as any).action as string;
@@ -1070,6 +1082,14 @@ async function setupTabListeners() {
 		browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 			if (changeInfo.status === 'complete') {
 				handleTabChange({ tabId, windowId: tab.windowId });
+			}
+		});
+	}
+	
+	if (browser.windows) {
+		browser.windows.onFocusChanged.addListener((windowId) => {
+			if (windowId !== browser.windows.WINDOW_ID_NONE) {
+				triggerDrivePollIfNeeded();
 			}
 		});
 	}
