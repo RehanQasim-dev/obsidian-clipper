@@ -57,6 +57,13 @@ export class CommentsView extends ItemView {
 
 	async onOpen(): Promise<void> {
 		this.contentEl.addClass('oc-comments');
+		// Clicking anywhere outside a card collapses the open one (re-clamps its
+		// text and hides its reply box). Bound once on the root, which survives the
+		// DOM rebuilds in refresh().
+		this.contentEl.addEventListener('click', (e) => {
+			const target = e.target as HTMLElement;
+			if (this.activeId && !target.closest('.oc-card')) this.focusAnnotation(null);
+		});
 		this.refresh();
 	}
 
@@ -65,10 +72,17 @@ export class CommentsView extends ItemView {
 		this.activeId = id;
 		this.refresh();
 		if (id) {
-			const input = this.contentEl.querySelector<HTMLTextAreaElement>(
-				`.oc-card[data-ann-id="${cssEscape(id)}"] .oc-reply-input`,
-			);
-			input?.focus();
+			const card = this.contentEl.querySelector<HTMLElement>(`.oc-card[data-ann-id="${cssEscape(id)}"]`);
+			const input = card?.querySelector<HTMLTextAreaElement>('.oc-reply-input');
+			// Focus without the browser's own scroll, then bring the whole expanded
+			// card into view ourselves. Opening a card grows it (full quote/comments +
+			// reply), so the reply box often lands below the fold — scroll it back on.
+			// Deferred to the next frame so the post-expand layout is measured.
+			input?.focus({ preventScroll: true });
+			requestAnimationFrame(() => {
+				card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				input?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+			});
 		}
 	}
 
@@ -156,6 +170,19 @@ export class CommentsView extends ItemView {
 		if (!unplaced) {
 			card.addEventListener('mouseenter', () => this.controller.emphasizeInSource(ann.id));
 			card.addEventListener('mouseleave', () => this.controller.emphasizeInSource(null));
+
+			// A plain click just opens the card: it expands the (clamped) quote and
+			// comments and reveals the reply box with the cursor already in it — no
+			// jumping to the note. Ctrl/Cmd+click (or double-click) is what scrolls
+			// the reading pane to the highlight.
+			card.addEventListener('click', (e) => {
+				if (e.metaKey || e.ctrlKey) {
+					this.controller.revealInSource(ann.id);
+					if (this.activeId !== ann.id) this.focusAnnotation(ann.id);
+					return;
+				}
+				if (this.activeId !== ann.id) this.focusAnnotation(ann.id);
+			});
 		}
 
 		// Header: an image preview for image annotations, else the quoted text.
@@ -187,6 +214,16 @@ export class CommentsView extends ItemView {
 				void this.controller.setColor(ann.id, color);
 			});
 		}
+		if (!unplaced) {
+			const locate = tools.createEl('button', { cls: 'oc-mini-btn' });
+			setIcon(locate, 'locate-fixed');
+			locate.setAttr('aria-label', 'Scroll to highlight in note');
+			locate.addEventListener('click', (e) => {
+				e.stopPropagation();
+				this.controller.revealInSource(ann.id);
+			});
+		}
+
 		const del = tools.createEl('button', { cls: 'oc-mini-btn' });
 		setIcon(del, 'trash-2');
 		del.setAttr('aria-label', 'Delete highlight');
@@ -194,13 +231,6 @@ export class CommentsView extends ItemView {
 			e.stopPropagation();
 			void this.controller.deleteAnnotation(ann.id);
 		});
-
-		if (!unplaced) {
-			head.addEventListener('click', () => {
-				this.controller.revealInSource(ann.id);
-				this.focusAnnotation(ann.id);
-			});
-		}
 
 		// Thread.
 		const thread = card.createDiv({ cls: 'oc-thread' });

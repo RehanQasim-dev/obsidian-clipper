@@ -128,36 +128,66 @@ function calloutNode(
 
 // --- Web-page highlights -----------------------------------------------------
 
+// One annotation node: a single highlight, or several blocks (shared groupId)
+// collapsed together. Pieces are kept separate (not concatenated) so a grouped
+// list selection can render as a real bullet list rather than inline HTML.
+interface GroupedNode {
+	color?: string;
+	notes?: string[];
+	pieces: string[]; // each piece is a block's stored outerHTML (e.g. <li>…</li>)
+}
+
 // Collapse multi-block highlights (shared groupId) into one node.
-function groupHighlights(highlights: HighlightLike[]): HighlightLike[] {
-	const out: HighlightLike[] = [];
-	const byGroup = new Map<string, HighlightLike>();
+function groupHighlights(highlights: HighlightLike[]): GroupedNode[] {
+	const out: GroupedNode[] = [];
+	const byGroup = new Map<string, GroupedNode>();
 	for (const h of highlights) {
 		if (!h.groupId) {
-			out.push(h);
+			out.push({ color: h.color, notes: [...(h.notes || [])], pieces: [h.content] });
 			continue;
 		}
 		const existing = byGroup.get(h.groupId);
 		if (existing) {
-			existing.content = `${existing.content} ${h.content}`.trim();
+			existing.pieces.push(h.content);
 			existing.notes = [...(existing.notes || []), ...(h.notes || [])];
 		} else {
-			const clone = { ...h, notes: [...(h.notes || [])] };
-			byGroup.set(h.groupId, clone);
-			out.push(clone);
+			const node: GroupedNode = { color: h.color, notes: [...(h.notes || [])], pieces: [h.content] };
+			byGroup.set(h.groupId, node);
+			out.push(node);
 		}
 	}
 	return out;
 }
 
+function isListItem(content: string): boolean {
+	return /^\s*<li\b/i.test(content);
+}
+
+// Strip the wrapping <li>…</li> so only the item's own (possibly inline-formatted)
+// content is marked; falls back to the raw content if it isn't a list item.
+function innerOfListItem(content: string): string {
+	const m = content.match(/^\s*<li\b[^>]*>([\s\S]*?)<\/li>\s*$/i);
+	return (m ? m[1] : content).trim();
+}
+
+// Body lines for a highlight callout. A selection made entirely of list items
+// becomes a Markdown bullet list (one `- ` per item) so Obsidian renders bullets;
+// anything else keeps the single inline-marked rendering.
+function highlightBody(pieces: string[], color?: string): string[] {
+	if (pieces.every(isListItem)) {
+		return pieces.map(p => `- ${mark(innerOfListItem(p), color)}`);
+	}
+	return [mark(pieces.join(' '), color)];
+}
+
 export function buildPageBlock(title: string, url: string, highlights: HighlightLike[]): string {
 	const nodes: string[] = [];
-	for (const h of groupHighlights(highlights)) {
-		const img = extractImageSrc(h.content, url);
+	for (const g of groupHighlights(highlights)) {
+		const img = g.pieces.length === 1 ? extractImageSrc(g.pieces[0], url) : null;
 		if (img) {
-			nodes.push(calloutNode('clip-img', h.color, 'Image', [`![${img.alt}|${IMAGE_DISPLAY_WIDTH}](${img.src})`], h.notes));
+			nodes.push(calloutNode('clip-img', g.color, 'Image', [`![${img.alt}|${IMAGE_DISPLAY_WIDTH}](${img.src})`], g.notes));
 		} else {
-			nodes.push(calloutNode('clip-hl', h.color, 'Highlight', [mark(h.content, h.color)], h.notes));
+			nodes.push(calloutNode('clip-hl', g.color, 'Highlight', highlightBody(g.pieces, g.color), g.notes));
 		}
 	}
 	return [`[Open original ↗](${url})`, '', nodes.join('\n\n')].join('\n');

@@ -111,6 +111,10 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - **Smart truncation**: replies longer than 3 lines collapse; 4th line fades/blurs out.
 - **Expandable**: clicking a truncated reply expands just that one (double-click → edit mode).
 - Inline markdown in editor: `Ctrl+B` / `Ctrl+I` wrap selection. Auto-saves on click-outside.
+- **Grouped highlights are one annotation on the live page**: a multi-block selection (e.g. several
+  bullet points sharing a `groupId`) shows a **single comment box / thread** anchored to the group's
+  first piece — comments save to that representative, and edit/delete map the flattened thread index
+  back to the piece that owns each note. Hover-emphasis lights up **all** pieces of the group at once.
 
 ### 3.3 Pencil tool (freehand drawing)
 - **`P`** activates pencil. Strokes drawn on a full-document SVG overlay.
@@ -188,7 +192,9 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - **Format:** each annotation in the comments note is a **semantic callout** carrying its highlight color as callout metadata —
   `clip-hl` (text), `clip-img` (image), `clip-transcript`, `clip-frame`, `clip-note`, with comments as a
   nested `clip-reply` callout. Body is real Markdown (callouts/embeds/`<mark>`) so Obsidian features keep
-  working. **Image** highlights embed the resolved remote URL at a capped width (`![alt|480](src)`); YouTube
+  working. A grouped selection made **entirely of list items** renders as a real Markdown bullet list
+  (one `- ` per `<li>`) inside the callout; other groups stay single inline-marked. **Image** highlights
+  embed the resolved remote URL at a capped width (`![alt|480](src)`); YouTube
   items render in video-time order with `M:SS` deep links (`&t=Ns`), frames embed `![[youtube-<videoId>-<itemId>.jpg|480]]`
   with the JPEG PUT to `<folder>/Attachments/`.
 - **Themes:** a selectable note style (`cards` = cards + side-by-side media/comments; `document` = minimal

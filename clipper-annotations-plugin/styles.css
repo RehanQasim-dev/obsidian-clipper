@@ -149,6 +149,8 @@
 .oc-color-yellow .oc-quote { background: color-mix(in srgb, var(--oc-yellow) 60%, transparent); }
 .oc-color-red .oc-quote { background: color-mix(in srgb, var(--oc-red) 60%, transparent); }
 .oc-color-green .oc-quote { background: color-mix(in srgb, var(--oc-green) 60%, transparent); }
+/* Opening the card (single click) reveals the full quote. */
+.oc-card.is-active .oc-quote { -webkit-line-clamp: unset; display: block; }
 
 .oc-card-tools { display: flex; align-items: center; gap: 4px; opacity: 0; transition: opacity 0.12s ease; }
 .oc-card:hover .oc-card-tools, .oc-card.is-active .oc-card-tools { opacity: 1; }
@@ -181,14 +183,25 @@
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 8px;
 	padding: 6px 9px;
+	cursor: pointer;
 }
-.oc-msg-body { font-size: 13px; line-height: 1.45; }
+/* Comments preview clamped to 3 lines; opening the card (single click) shows them in full. */
+.oc-msg-body {
+	font-size: 13px;
+	line-height: 1.45;
+	display: -webkit-box;
+	-webkit-line-clamp: 3;
+	-webkit-box-orient: vertical;
+	overflow: hidden;
+}
+.oc-card.is-active .oc-msg-body { -webkit-line-clamp: unset; display: block; overflow: visible; }
 .oc-msg-body > :first-child { margin-top: 0; }
 .oc-msg-body > :last-child { margin-bottom: 0; }
 .oc-msg-meta { margin-top: 3px; font-size: 11px; color: var(--text-faint); }
 
-/* reply box */
-.oc-reply { display: flex; gap: 6px; margin-top: 8px; align-items: flex-end; }
+/* reply box — hidden until the card is opened (single click) */
+.oc-reply { display: none; gap: 6px; margin-top: 8px; align-items: flex-end; }
+.oc-card.is-active .oc-reply { display: flex; }
 .oc-reply-input {
 	flex: 1;
 	resize: none;

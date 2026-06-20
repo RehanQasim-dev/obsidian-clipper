@@ -214,26 +214,33 @@ function ensureActiveHighlight(color: string): HighlightInstance | null {
 }
 
 export function setActiveHighlight(id: string | null): void {
-	// Clear any previous emphasis (all colors + the element overlay).
+	// Clear any previous emphasis (all colors + every active element overlay; a
+	// group can light up several at once, so clear by class rather than one id).
 	activeHighlightInstances.forEach(inst => inst.clear());
-	if (activeOverlayId) {
-		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${activeOverlayId}"]`)
-			.forEach(el => el.classList.remove('is-active'));
-		activeOverlayId = null;
-	}
+	document.querySelectorAll('.obsidian-highlight-overlay.is-active')
+		.forEach(el => el.classList.remove('is-active'));
+	activeOverlayId = null;
 	if (!id) return;
 
 	const highlight = highlights.find((h: AnyHighlightData) => h.id === id);
 	if (!highlight) return;
 
-	if (highlight.type === 'text') {
-		const inst = ensureActiveHighlight(highlight.color || 'yellow');
-		const ranges = textHighlightRanges.get(id);
-		if (inst && ranges) ranges.forEach(r => inst.add(r));
-	} else {
-		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${id}"]`)
-			.forEach(el => el.classList.add('is-active'));
-		activeOverlayId = id;
+	// Emphasize the whole annotation: a multi-block selection (e.g. bullet
+	// points) is one logical highlight, so hovering one piece lights up all.
+	const members = highlight.groupId
+		? highlights.filter((h: AnyHighlightData) => h.groupId === highlight.groupId)
+		: [highlight];
+
+	for (const m of members) {
+		if (m.type === 'text') {
+			const inst = ensureActiveHighlight(m.color || 'yellow');
+			const ranges = textHighlightRanges.get(m.id);
+			if (inst && ranges) ranges.forEach(r => inst.add(r));
+		} else {
+			document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${m.id}"]`)
+				.forEach(el => el.classList.add('is-active'));
+			activeOverlayId = m.id;
+		}
 	}
 }
 

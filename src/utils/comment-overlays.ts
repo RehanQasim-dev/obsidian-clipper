@@ -23,6 +23,37 @@ let singleClickTimer: number | null = null; // disambiguates single- vs double-c
 // and saving work reliably. Keyed by box element so entries GC with the box.
 const boxRenderCache = new WeakMap<HTMLElement, string>();
 
+// --- Group handling ----------------------------------------------------------
+// A multi-block selection (e.g. several bullet points) produces one highlight
+// per block sharing a `groupId`. On the live page we treat the whole group as a
+// SINGLE annotation: one comment thread, one box, anchored to the group's first
+// piece (its "representative"). All comment ids passed around in this module are
+// representative ids.
+
+// Every highlight in the same annotation unit as `h`, in document order.
+// `highlights` is kept sorted, so the first entry is the representative.
+function groupMembers(h: AnyHighlightData): AnyHighlightData[] {
+	if (!h.groupId) return [h];
+	return highlights.filter(x => x.groupId === h.groupId);
+}
+
+// Map any piece id to its group's representative highlight.
+function repFor(id: string): AnyHighlightData | undefined {
+	const h = highlights.find(x => x.id === id);
+	return h ? groupMembers(h)[0] : undefined;
+}
+
+// One flattened comment thread for the whole group. Each ref records which
+// piece actually stores the note so edits/deletes target the right highlight.
+interface NoteRef { note: string; ownerId: string; ownerIndex: number }
+function groupNotes(rep: AnyHighlightData): NoteRef[] {
+	const refs: NoteRef[] = [];
+	for (const m of groupMembers(rep)) {
+		(m.notes || []).forEach((note, ownerIndex) => refs.push({ note, ownerId: m.id, ownerIndex }));
+	}
+	return refs;
+}
+
 function parseNoteString(note: string): { text: string, timestamp?: number, edited?: number } {
 	const tsMatch = note.match(/<!--timestamp:(\d+)-->/);
 	const edMatch = note.match(/<!--edited:(\d+)-->/);
@@ -96,6 +127,9 @@ function getHighlightBlockRect(highlight: AnyHighlightData): DOMRect | null {
 }
 
 export function startAddingComment(highlightId: string) {
+	// Comment on the group as a whole, not the individual block that was clicked.
+	const rep = repFor(highlightId);
+	if (rep) highlightId = rep.id;
 	editingHighlightIds.add(highlightId);
 	renderCommentBoxes();
 	
@@ -122,9 +156,19 @@ export function renderCommentBoxes() {
 	document.body.style.paddingLeft = '';
 	document.body.style.paddingRight = '';
 
-	const highlightsWithComments = highlights.filter(h => 
-		(h.notes && h.notes.length > 0) || editingHighlightIds.has(h.id)
-	);
+	// One box per annotation unit (a group → its representative; or an ungrouped
+	// highlight). A unit gets a box if any of its pieces carries a comment or its
+	// representative is currently being edited.
+	const highlightsWithComments: AnyHighlightData[] = [];
+	const seenUnits = new Set<string>();
+	for (const h of highlights) {
+		const key = h.groupId || h.id;
+		if (seenUnits.has(key)) continue;
+		seenUnits.add(key);
+		const rep = groupMembers(h)[0];
+		const hasComment = groupMembers(rep).some(m => m.notes && m.notes.length > 0);
+		if (hasComment || editingHighlightIds.has(rep.id)) highlightsWithComments.push(rep);
+	}
 
 	if (highlightsWithComments.length === 0) {
 		return;
@@ -445,7 +489,9 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 }
 
 function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
-	const notes = highlight.notes || [];
+	// `highlight` is the group representative; the thread aggregates every piece.
+	const noteRefs = groupNotes(highlight);
+	const notes = noteRefs.map(r => r.note);
 	const isEditing = editingHighlightIds.has(highlight.id);
 	const isFocused = focusedHighlightId === highlight.id || isEditing;
 
@@ -634,19 +680,22 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 		renderCommentBoxes();
 		return;
 	}
-	
-	const highlight = highlights.find(h => h.id === highlightId);
-	if (highlight && highlight.notes) {
-		const oldParsed = parseNoteString(highlight.notes[index]);
+
+	// `index` is into the group's flattened thread; resolve the piece that owns it.
+	const rep = highlights.find(h => h.id === highlightId);
+	const ref = rep ? groupNotes(rep)[index] : undefined;
+	const owner = ref ? highlights.find(h => h.id === ref.ownerId) : undefined;
+	if (owner && owner.notes && ref) {
+		const oldParsed = parseNoteString(owner.notes[ref.ownerIndex]);
 		const ts = oldParsed.timestamp || Date.now();
 		// Keep the original creation timestamp (the comment's stable id) but record
 		// a fresh edit time so cross-device merges keep the most recent edit.
 		// Build new objects so the undo snapshot retains the pre-edit text.
-		const newNotes = highlight.notes.map((n, i) =>
-			i === index ? `${text}<!--timestamp:${ts}--><!--edited:${Date.now()}-->` : n);
+		const newNotes = owner.notes.map((n, i) =>
+			i === ref.ownerIndex ? `${text}<!--timestamp:${ts}--><!--edited:${Date.now()}-->` : n);
 		expandedCommentIndexes.delete(`${highlightId}-${index}`);
-		const updated = { ...highlight, notes: newNotes };
-		const newHighlights = highlights.map(h => h.id === highlightId ? updated : h);
+		const updated = { ...owner, notes: newNotes };
+		const newHighlights = highlights.map(h => h.id === owner.id ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 		renderCommentBoxes();
@@ -654,12 +703,15 @@ function saveEditedComment(highlightId: string, index: number, text: string) {
 }
 
 function deleteComment(highlightId: string, index: number) {
-	const highlight = highlights.find(h => h.id === highlightId);
-	if (highlight && highlight.notes) {
+	// `index` is into the group's flattened thread; resolve the owning piece.
+	const rep = highlights.find(h => h.id === highlightId);
+	const ref = rep ? groupNotes(rep)[index] : undefined;
+	const owner = ref ? highlights.find(h => h.id === ref.ownerId) : undefined;
+	if (owner && owner.notes && ref) {
 		// New objects (no in-place splice) so undo can restore the deleted comment.
-		const newNotes = highlight.notes.filter((_, i) => i !== index);
-		const updated = { ...highlight, notes: newNotes };
-		const newHighlights = highlights.map(h => h.id === highlightId ? updated : h);
+		const newNotes = owner.notes.filter((_, i) => i !== ref.ownerIndex);
+		const updated = { ...owner, notes: newNotes };
+		const newHighlights = highlights.map(h => h.id === owner.id ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
 		setActiveHighlight(null); // clear emphasis in case the box is removed

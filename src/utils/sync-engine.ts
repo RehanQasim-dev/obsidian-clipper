@@ -174,6 +174,14 @@ export async function sync(interactive = false): Promise<void> {
 async function doSync(interactive: boolean): Promise<void> {
 	await setStatus({ syncing: true, lastError: undefined });
 	try {
+		// The whole reconcile is a read-modify-write over storage.local, but the
+		// modify step does seconds of network I/O. An annotation/comment saved by a
+		// content script during that window would otherwise be clobbered when we
+		// write the (stale) merge back. Guard with a compare-and-swap on local
+		// storage: if the source data changed under us, redo the reconcile with the
+		// fresh data instead of overwriting it. Bounded so a busy editor still
+		// terminates (the regular triggers will pick up any straggler edits).
+		for (let pass = 0; ; pass++) {
 		const now = Date.now();
 
 		const localStore = await browser.storage.local.get([
@@ -188,6 +196,13 @@ async function doSync(interactive: boolean): Promise<void> {
 			drawings: (localStore.drawings as DrawingsStorage) || {},
 			videoAnnotations: localVideo,
 		};
+		// Snapshot the exact source bytes we are about to reconcile, so we can
+		// detect a concurrent edit before committing the result below.
+		const localDataJson = JSON.stringify({
+			highlights: localStore.highlights ?? null,
+			drawings: localStore.drawings ?? null,
+			video_annotations: localStore.video_annotations ?? null,
+		});
 		const snapshot: Snapshot = (localStore[SNAPSHOT_KEY] as Snapshot) || {
 			highlights: {},
 			drawings: {},
@@ -322,6 +337,20 @@ async function doSync(interactive: boolean): Promise<void> {
 			mergedVideoLocal[url] = { ...mergedVideo[url], items };
 		}
 
+		// Compare-and-swap guard: if a content script wrote new annotation data
+		// while we were reconciling over the network, our merge is stale — writing
+		// it back would clobber that edit. Re-read and, if the source changed, redo
+		// the reconcile (which now sees the new data) instead of committing.
+		const fresh = await browser.storage.local.get(['highlights', 'drawings', 'video_annotations']);
+		const freshDataJson = JSON.stringify({
+			highlights: fresh.highlights ?? null,
+			drawings: fresh.drawings ?? null,
+			video_annotations: fresh.video_annotations ?? null,
+		});
+		if (freshDataJson !== localDataJson && pass < 5) {
+			continue; // concurrent local edit — reconcile again with the fresh data
+		}
+
 		// Apply to local storage only if something actually changed, so the
 		// resulting storage.onChanged doesn't trigger an endless sync loop.
 		const localWrite: Record<string, unknown> = {};
@@ -343,6 +372,8 @@ async function doSync(interactive: boolean): Promise<void> {
 		await browser.storage.local.set(localWrite);
 
 		await setStatus({ connected: true, syncing: false, lastSyncedAt: now, lastError: undefined });
+		break;
+		}
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		await setStatus({ syncing: false, lastError: message });
