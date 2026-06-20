@@ -74,15 +74,18 @@ export class CommentsView extends ItemView {
 		if (id) {
 			const card = this.contentEl.querySelector<HTMLElement>(`.oc-card[data-ann-id="${cssEscape(id)}"]`);
 			const input = card?.querySelector<HTMLTextAreaElement>('.oc-reply-input');
-			// Focus without the browser's own scroll, then bring the whole expanded
-			// card into view ourselves. Opening a card grows it (full quote/comments +
-			// reply), so the reply box often lands below the fold — scroll it back on.
-			// Deferred to the next frame so the post-expand layout is measured.
+			// Focus without the browser's own scroll, then bring the reply box into
+			// view ourselves (scrolling it visible pulls the whole expanded card up).
 			input?.focus({ preventScroll: true });
-			requestAnimationFrame(() => {
-				card?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-				input?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-			});
+			if (input) {
+				// Comments render markdown asynchronously and images load later, so the
+				// card keeps growing after the first paint and would push the reply back
+				// below the fold. Re-run the scroll a few times as the layout settles.
+				const reveal = () => input.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+				requestAnimationFrame(reveal);
+				window.setTimeout(reveal, 150);
+				window.setTimeout(reveal, 400);
+			}
 		}
 	}
 

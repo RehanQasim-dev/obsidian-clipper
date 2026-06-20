@@ -213,6 +213,8 @@
 	border: 1px solid var(--background-modifier-border);
 	background: var(--background-primary);
 	color: var(--text-normal);
+	/* breathing room so scrollIntoView doesn't leave it flush against the edge */
+	scroll-margin-block: 16px;
 }
 .oc-reply-input:focus { border-color: var(--interactive-accent); outline: none; }
 .oc-reply-send {
