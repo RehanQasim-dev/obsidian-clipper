@@ -1,5 +1,5 @@
 import {
-	VideoItem, loadVideoData, upsertVideoItem,
+	VideoItem, loadVideoData, upsertVideoItem, genVideoId
 } from './video-storage';
 import { renderMarkupSvg } from './video-markup';
 import { makeVideoNote, parseVideoNote, renderNoteHtml, formatVideoTime } from './video-notes';
@@ -63,6 +63,16 @@ export async function openComments(o: OpenCommentsOpts): Promise<void> {
 
 	if (o.video) o.video.pause();
 	build();
+}
+
+export function addCommentOnlyNote(): void {
+	if (!active || !opts || !opts.video) return;
+	opts.video.pause();
+	const note: VideoItem = { id: genVideoId(), kind: 'note', videoTime: opts.video.currentTime, notes: [] };
+	items.push(note);
+	items.sort((a, b) => a.videoTime - b.videoTime);
+	focusId = note.id;
+	renderConversation();
 }
 
 // --- Layout ------------------------------------------------------------------

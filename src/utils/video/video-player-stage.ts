@@ -30,6 +30,66 @@ let panelW = 360;
 let base = { left: 0, top: 0, width: 0, height: 0 };
 let savedHtmlOverflow = '';
 const hosts = new Set<HTMLElement>();
+let scriptInjected = false;
+
+function injectPatchScript() {
+	if (scriptInjected) return;
+	scriptInjected = true;
+	const s = document.createElement('script');
+	s.id = 'ob-vps-patch';
+	s.textContent = `
+		(function() {
+			function patchEventProperty(propName, isY) {
+				const origDesc = Object.getOwnPropertyDescriptor(MouseEvent.prototype, propName);
+				if (!origDesc) return;
+				Object.defineProperty(MouseEvent.prototype, propName, {
+					get: function() {
+						const val = origDesc.get.call(this);
+						const scaleStr = document.body.dataset.obVpsScale;
+						if (!scaleStr) return val;
+						
+						let target = this.target;
+						if (target && target.nodeType === 3) target = target.parentNode;
+						if (!target || !target.closest) return val;
+						
+						if (!target.closest('#movie_player')) return val;
+						
+						const scale = parseFloat(scaleStr);
+						if (scale === 1) return val;
+						
+						const baseLeft = parseFloat(document.body.dataset.obVpsLeft || '0');
+						const baseTop = parseFloat(document.body.dataset.obVpsTop || '0');
+						const centerDy = parseFloat(document.body.dataset.obVpsDy || '0');
+						
+						if (isY) {
+							let cy = val;
+							if (propName === 'pageY') cy -= window.scrollY;
+							const unscaled_cy = (cy - (baseTop + centerDy)) / scale + baseTop;
+							return propName === 'pageY' ? unscaled_cy + window.scrollY : unscaled_cy;
+						} else {
+							let cx = val;
+							if (propName === 'pageX') cx -= window.scrollX;
+							const unscaled_cx = (cx - baseLeft) / scale + baseLeft;
+							return propName === 'pageX' ? unscaled_cx + window.scrollX : unscaled_cx;
+						}
+					}
+				});
+			}
+
+			['clientX', 'pageX', 'x'].forEach(p => patchEventProperty(p, false));
+			['clientY', 'pageY', 'y'].forEach(p => patchEventProperty(p, true));
+			
+			if (typeof PointerEvent !== 'undefined') {
+				const peDesc = Object.getOwnPropertyDescriptor(PointerEvent.prototype, 'clientX');
+				if (peDesc) {
+					['clientX', 'pageX', 'x'].forEach(p => patchEventProperty(p, false));
+					['clientY', 'pageY', 'y'].forEach(p => patchEventProperty(p, true));
+				}
+			}
+		})();
+	`;
+	document.head.appendChild(s);
+}
 
 function fsElement(): HTMLElement | null {
 	return (document.fullscreenElement as HTMLElement | null);
@@ -70,6 +130,10 @@ function applyScale() {
 	player.style.transition = 'transform 0.3s ease';
 	// Shrink toward top-left, then drop down so it's vertically centered.
 	player.style.transform = `translateY(${centerDy()}px) scale(${scaleVal})`;
+	document.body.dataset.obVpsScale = scaleVal.toString();
+	document.body.dataset.obVpsLeft = base.left.toString();
+	document.body.dataset.obVpsTop = base.top.toString();
+	document.body.dataset.obVpsDy = centerDy().toString();
 }
 
 // Dim only the ORIGINAL player box (not the rest of the page): the bands above
@@ -140,6 +204,7 @@ export function engagePlayerStage(): void {
 		savedHtmlOverflow = document.documentElement.style.overflow;
 		document.documentElement.style.overflow = 'hidden';
 		lockEscape();
+		injectPatchScript();
 		window.addEventListener('resize', relayoutAll, true);
 		document.addEventListener('fullscreenchange', onFsChange, true);
 	}
@@ -171,6 +236,10 @@ export function disengagePlayerStage(): void {
 		player = null;
 		saved = null;
 		hosts.clear();
+		delete document.body.dataset.obVpsScale;
+		delete document.body.dataset.obVpsLeft;
+		delete document.body.dataset.obVpsTop;
+		delete document.body.dataset.obVpsDy;
 		document.documentElement.style.overflow = savedHtmlOverflow;
 		// Delay the unlock: if this disengage was triggered by an Escape press,
 		// unlocking immediately would let that same press also exit fullscreen.

@@ -16,7 +16,7 @@ import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './ut
 import { parseForClip } from './utils/clip-utils';
 import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly, isAnnotatorActive } from './utils/video/video-annotator';
 import { startTranscriptAnnotate as videoTranscript, isTranscriptPanelActive } from './utils/video/video-transcript-panel';
-import { isCommentsActive } from './utils/video/video-comments';
+import { isCommentsActive, addCommentOnlyNote } from './utils/video/video-comments';
 
 declare global {
 	interface Window {
@@ -511,7 +511,7 @@ declare global {
 	// YouTube lecture-note keys (S/N/T) are intercepted in the CAPTURE phase on
 	// window so they run *before* YouTube's own document-level shortcut handlers
 	// (which would otherwise also fire — e.g. T toggling theater mode, N skipping
-	// to the next video). We always stopImmediatePropagation so these keys never
+	// to the next video). We use stopPropagation so these keys never
 	// reach YouTube on a watch page — even when one of our panels is already open
 	// (so e.g. T can't toggle theater behind the panel); in that case we just
 	// suppress and don't reopen. Other keys are left alone, so YouTube's own
@@ -530,7 +530,13 @@ declare global {
 		const transKey = (generalSettings.videoTranscriptKey || 't').toLowerCase();
 		if (k !== capKey && k !== comKey && k !== transKey) return;
 		e.preventDefault();
-		e.stopImmediatePropagation();
+		e.stopPropagation();
+
+		if (k === comKey && isCommentsActive()) {
+			addCommentOnlyNote();
+			return;
+		}
+
 		// A panel already owns the screen → just suppress the key, don't reopen.
 		if (isAnnotatorActive() || isCommentsActive() || isTranscriptPanelActive()) return;
 		ensureHighlighterCSS();
