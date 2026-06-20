@@ -40,10 +40,26 @@ export interface VideoText {
 	text: string;
 }
 
+export interface VideoRect {
+	id: string;
+	color: VideoColor;
+	x: number; y: number; w: number; h: number; // normalized 0..1
+	weight?: StrokeWidth;
+}
+
+export interface VideoArrow {
+	id: string;
+	color: VideoColor;
+	x1: number; y1: number; x2: number; y2: number; // normalized 0..1
+	weight?: StrokeWidth;
+}
+
 export interface VideoMarkup {
 	strokes: VideoStroke[];
 	lines: VideoLine[];
 	texts: VideoText[];
+	rects?: VideoRect[];
+	arrows?: VideoArrow[];
 }
 
 export interface VideoFrameImage {
@@ -87,7 +103,7 @@ export type VideoStorage = Record<string, VideoAnnotationData>;
 const STORAGE_KEY = 'video_annotations';
 
 export function emptyMarkup(): VideoMarkup {
-	return { strokes: [], lines: [], texts: [] };
+	return { strokes: [], lines: [], texts: [], rects: [], arrows: [] };
 }
 
 export function genVideoId(): string {

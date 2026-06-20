@@ -23,7 +23,7 @@ type Mode = 'draw' | 'comment';
 // 'select' is the neutral home state: no drawing happens, and Enter saves / Esc
 // exits / N comments. Picking pencil/line/text activates that tool; Esc steps
 // back to 'select' keeping whatever was drawn.
-type Tool = 'select' | 'pencil' | 'line' | 'text';
+type Tool = 'select' | 'pencil' | 'line' | 'text' | 'rect' | 'arrow';
 
 let active = false;
 let session = 0; // bumps each open; guards stale async/listeners
@@ -48,6 +48,7 @@ let item: VideoItem | null = null;
 import { StrokeWidth } from './video-storage';
 
 let currentTool: Tool = 'pencil';
+let toolLocked = false;
 let currentColor: VideoColor = 'yellow';
 let currentStrokeWidth: StrokeWidth = 'medium';
 let lastFontSizeScale = 1.0;
@@ -263,10 +264,12 @@ function buildDrawTools() {
 	bar.className = 'ob-vid-toolbar';
 
 	const tools: { tool: Tool; icon: string; label: string }[] = [
-		{ tool: 'select', icon: '↖', label: 'Select (Esc) — Enter saves, N comments' },
-		{ tool: 'pencil', icon: '✏️', label: 'Draw' },
-		{ tool: 'line', icon: '╱', label: 'Line (Shift = snap)' },
-		{ tool: 'text', icon: 'A', label: 'Text' },
+		{ tool: 'select', icon: '↖', label: 'Select (V)' },
+		{ tool: 'pencil', icon: '✏️', label: 'Draw (P)' },
+		{ tool: 'line', icon: '╱', label: 'Line (L)' },
+		{ tool: 'arrow', icon: '↘', label: 'Arrow (A)' },
+		{ tool: 'rect', icon: '□', label: 'Rectangle (R)' },
+		{ tool: 'text', icon: 'T', label: 'Text (T)' },
 	];
 	for (const t of tools) {
 		const b = document.createElement('button');
@@ -276,8 +279,8 @@ function buildDrawTools() {
 		b.title = t.label;
 		b.textContent = t.icon;
 		b.addEventListener('click', (e) => {
-			if (t.tool === 'line') {
-				if (currentTool === 'line') {
+			if (t.tool === 'line' || t.tool === 'arrow' || t.tool === 'rect') {
+				if (currentTool === t.tool) {
 					toggleLinePopup(b, bar);
 				} else {
 					setTool(t.tool);
@@ -286,6 +289,12 @@ function buildDrawTools() {
 			} else {
 				setTool(t.tool);
 				hideLinePopup();
+			}
+		});
+		b.addEventListener('dblclick', (e) => {
+			if (t.tool !== 'select' && t.tool !== 'pencil') {
+				toolLocked = true;
+				b.classList.add('is-locked');
 			}
 		});
 		bar.appendChild(b);
@@ -311,9 +320,12 @@ function buildDrawTools() {
 
 function setTool(t: Tool) {
 	currentTool = t;
+	toolLocked = (t === 'select' || t === 'pencil');
 	if (root) root.dataset.tool = t;
-	root?.querySelectorAll('.ob-vid-tool').forEach(el =>
-		el.classList.toggle('is-active', (el as HTMLElement).dataset.tool === t));
+	root?.querySelectorAll('.ob-vid-tool').forEach(el => {
+		el.classList.toggle('is-active', (el as HTMLElement).dataset.tool === t);
+		el.classList.toggle('is-locked', (el as HTMLElement).dataset.tool === t && toolLocked);
+	});
 	// Leaving the select tool clears any selection highlight.
 	if (t !== 'select' && selectedId) { selectedId = null; renderCommitted(); }
 }
@@ -346,6 +358,10 @@ function toggleLinePopup(anchor: HTMLElement, bar: HTMLElement) {
 				if (l) { pushUndoSnapshot(); l.weight = w; renderCommitted(); }
 				const s = markup.strokes.find(x => x.id === selectedId);
 				if (s) { pushUndoSnapshot(); s.weight = w; renderCommitted(); }
+				const r = markup.rects?.find(x => x.id === selectedId);
+				if (r) { pushUndoSnapshot(); r.weight = w; renderCommitted(); }
+				const a = markup.arrows?.find(x => x.id === selectedId);
+				if (a) { pushUndoSnapshot(); a.weight = w; renderCommitted(); }
 			}
 			hideLinePopup();
 		});
@@ -417,6 +433,17 @@ function hitTest(lx: number, ly: number): string | null {
 	const { w, h } = wrapSize();
 	const TOL = 12;
 
+	for (let i = (markup.rects || []).length - 1; i >= 0; i--) {
+		const r = markup.rects![i];
+		const rx = r.x * w, ry = r.y * h, rw = r.w * w, rh = r.h * h;
+		if (lx >= rx - TOL && lx <= rx + rw + TOL && ly >= ry - TOL && ly <= ry + rh + TOL) {
+			if (!(lx > rx + TOL && lx < rx + rw - TOL && ly > ry + TOL && ly < ry + rh - TOL)) return r.id;
+		}
+	}
+	for (let i = (markup.arrows || []).length - 1; i >= 0; i--) {
+		const a = markup.arrows![i];
+		if (distToSeg(lx, ly, a.x1 * w, a.y1 * h, a.x2 * w, a.y2 * h) <= TOL) return a.id;
+	}
 	for (let i = markup.texts.length - 1; i >= 0; i--) {
 		const t = markup.texts[i];
 		// Prefer the rendered box's real bounds; fall back to an estimate.
@@ -454,6 +481,10 @@ function selectedColor(): VideoColor | null {
 	if (s) return s.color;
 	const l = markup.lines.find(x => x.id === selectedId);
 	if (l) return l.color;
+	const r = markup.rects?.find(x => x.id === selectedId);
+	if (r) return r.color;
+	const a = markup.arrows?.find(x => x.id === selectedId);
+	if (a) return a.color;
 	const t = markup.texts.find(x => x.id === selectedId);
 	return t ? t.color : null;
 }
@@ -464,6 +495,10 @@ function translateSelected(dxNorm: number, dyNorm: number) {
 	if (s) { for (let i = 0; i < s.points.length; i += 2) { s.points[i] = clamp(s.points[i] + dxNorm); s.points[i + 1] = clamp(s.points[i + 1] + dyNorm); } return; }
 	const l = markup.lines.find(x => x.id === selectedId);
 	if (l) { l.x1 = clamp(l.x1 + dxNorm); l.y1 = clamp(l.y1 + dyNorm); l.x2 = clamp(l.x2 + dxNorm); l.y2 = clamp(l.y2 + dyNorm); return; }
+	const r = markup.rects?.find(x => x.id === selectedId);
+	if (r) { r.x = clamp(r.x + dxNorm); r.y = clamp(r.y + dyNorm); return; }
+	const a = markup.arrows?.find(x => x.id === selectedId);
+	if (a) { a.x1 = clamp(a.x1 + dxNorm); a.y1 = clamp(a.y1 + dyNorm); a.x2 = clamp(a.x2 + dxNorm); a.y2 = clamp(a.y2 + dyNorm); return; }
 	const t = markup.texts.find(x => x.id === selectedId);
 	if (t) {
 		t.x = clamp(t.x + dxNorm); 
@@ -479,6 +514,8 @@ function deleteSelected() {
 	markup.strokes = markup.strokes.filter(x => x.id !== selectedId);
 	markup.lines = markup.lines.filter(x => x.id !== selectedId);
 	markup.texts = markup.texts.filter(x => x.id !== selectedId);
+	if (markup.rects) markup.rects = markup.rects.filter(x => x.id !== selectedId);
+	if (markup.arrows) markup.arrows = markup.arrows.filter(x => x.id !== selectedId);
 	selectedId = null;
 	renderCommitted();
 }
@@ -488,11 +525,15 @@ function recolorSelected(c: VideoColor) {
 	const s = markup.strokes.find(x => x.id === selectedId);
 	const l = markup.lines.find(x => x.id === selectedId);
 	const t = markup.texts.find(x => x.id === selectedId);
-	if (!s && !l && !t) return;
+	const r = markup.rects?.find(x => x.id === selectedId);
+	const a = markup.arrows?.find(x => x.id === selectedId);
+	if (!s && !l && !t && !r && !a) return;
 	pushUndoSnapshot();
 	if (s) s.color = c;
 	if (l) l.color = c;
 	if (t) t.color = c;
+	if (r) r.color = c;
+	if (a) a.color = c;
 	renderCommitted();
 }
 
@@ -576,6 +617,11 @@ function onPointerDown(e: PointerEvent) {
 		const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 		path.setAttribute('class', `ob-vid-livepath ${colorHexAttr()}`);
 		svg.appendChild(path);
+	} else if (currentTool === 'rect') {
+		lineStart = { x: p.x, y: p.y };
+		const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+		rect.setAttribute('class', `ob-vid-liverect ${colorHexAttr()}`);
+		svg.appendChild(rect);
 	} else {
 		lineStart = { x: p.x, y: p.y };
 		const ln = document.createElementNS('http://www.w3.org/2000/svg', 'line');
@@ -609,11 +655,24 @@ function onPointerMove(e: PointerEvent) {
 	} else if (lineStart) {
 		let end = { x: p.x, y: p.y };
 		if (e.shiftKey) end = snapLineTo45(lineStart.x, lineStart.y, p.x, p.y);
-		const ln = liveSvg.firstChild as SVGLineElement;
-		ln.setAttribute('x1', String(lineStart.x));
-		ln.setAttribute('y1', String(lineStart.y));
-		ln.setAttribute('x2', String(end.x));
-		ln.setAttribute('y2', String(end.y));
+		if (currentTool === 'rect') {
+			const rx = Math.min(lineStart.x, end.x);
+			const ry = Math.min(lineStart.y, end.y);
+			let rw = Math.abs(end.x - lineStart.x);
+			let rh = Math.abs(end.y - lineStart.y);
+			if (e.shiftKey) { const size = Math.max(rw, rh); rw = size; rh = size; }
+			const rect = liveSvg.firstChild as SVGRectElement;
+			rect.setAttribute('x', String(rx));
+			rect.setAttribute('y', String(ry));
+			rect.setAttribute('width', String(rw));
+			rect.setAttribute('height', String(rh));
+		} else {
+			const ln = liveSvg.firstChild as SVGLineElement;
+			ln.setAttribute('x1', String(lineStart.x));
+			ln.setAttribute('y1', String(lineStart.y));
+			ln.setAttribute('x2', String(end.x));
+			ln.setAttribute('y2', String(end.y));
+		}
 	}
 	e.preventDefault();
 }
@@ -640,18 +699,47 @@ function onPointerUp(e: PointerEvent) {
 		for (let i = 0; i < livePts.length; i += 2) { pts.push(nx(livePts[i]), ny(livePts[i + 1])); }
 		markup.strokes.push({ id: genVideoId(), color: currentColor, points: pts, weight: currentStrokeWidth });
 		renderCommitted();
-	} else if (currentTool === 'line' && lineStart) {
+	} else if (currentTool === 'rect' && lineStart) {
+		const p = toLocal(e);
+		let end = { x: p.x, y: p.y };
+		const rx = Math.min(lineStart.x, end.x);
+		const ry = Math.min(lineStart.y, end.y);
+		let rw = Math.abs(end.x - lineStart.x);
+		let rh = Math.abs(end.y - lineStart.y);
+		if (e.shiftKey) { const size = Math.max(rw, rh); rw = size; rh = size; }
+		if (rw > 4 && rh > 4) {
+			pushUndoSnapshot();
+			if (!markup.rects) markup.rects = [];
+			markup.rects.push({
+				id: genVideoId(), color: currentColor,
+				x: nx(rx), y: ny(ry), w: nx(rw), h: ny(rh),
+				weight: currentStrokeWidth
+			});
+			renderCommitted();
+			if (!toolLocked) setTool('select');
+		}
+	} else if ((currentTool === 'line' || currentTool === 'arrow') && lineStart) {
 		const p = toLocal(e);
 		let end = { x: p.x, y: p.y };
 		if (e.shiftKey) end = snapLineTo45(lineStart.x, lineStart.y, p.x, p.y);
 		if (Math.hypot(end.x - lineStart.x, end.y - lineStart.y) > 4) {
 			pushUndoSnapshot();
-			markup.lines.push({
-				id: genVideoId(), color: currentColor,
-				x1: nx(lineStart.x), y1: ny(lineStart.y), x2: nx(end.x), y2: ny(end.y),
-				weight: currentStrokeWidth
-			});
+			if (currentTool === 'arrow') {
+				if (!markup.arrows) markup.arrows = [];
+				markup.arrows.push({
+					id: genVideoId(), color: currentColor,
+					x1: nx(lineStart.x), y1: ny(lineStart.y), x2: nx(end.x), y2: ny(end.y),
+					weight: currentStrokeWidth
+				});
+			} else {
+				markup.lines.push({
+					id: genVideoId(), color: currentColor,
+					x1: nx(lineStart.x), y1: ny(lineStart.y), x2: nx(end.x), y2: ny(end.y),
+					weight: currentStrokeWidth
+				});
+			}
 			renderCommitted();
+			if (!toolLocked) setTool('select');
 		}
 	}
 	livePts = [];
@@ -736,6 +824,7 @@ function placeTextInput(x: number, y: number, initial = '', boxOverride?: number
 		}
 		ta.remove();
 		clearActive();
+		if (!toolLocked && currentTool === 'text') setTool('select');
 	};
 	const cancel = () => { done = true; ta.remove(); clearActive(); };
 	activeTextCommit = commit;
@@ -753,12 +842,16 @@ function undoMarkup() {
 }
 
 // Double-click a text label (select tool) to edit it: reopen the editor with its
-// text, replacing the old label on commit.
+// text, replacing the old label on commit. If empty space is clicked, spawn new text.
 function onDoubleClick(e: MouseEvent) {
 	if (mode !== 'draw' || currentTool !== 'select' || !frameInner) return;
 	const fr = frameInner.getBoundingClientRect();
-	const mid = hitTest(e.clientX - fr.left, e.clientY - fr.top);
-	if (!mid) return;
+	const lx = e.clientX - fr.left, ly = e.clientY - fr.top;
+	const mid = hitTest(lx, ly);
+	if (!mid) {
+		placeTextInput(lx, ly);
+		return;
+	}
 	const idx = markup.texts.findIndex(t => t.id === mid);
 	if (idx < 0) return;
 	const t = markup.texts[idx];
@@ -955,6 +1048,12 @@ function onKeyDown(e: KeyboardEvent) {
 		if (e.key === '2') { e.preventDefault(); setColor('red'); return; }
 		if (e.key === '3') { e.preventDefault(); setColor('green'); return; }
 		if (e.key === '4') { e.preventDefault(); setColor('black'); return; }
+		if (e.key === 'v' || e.key === 'V') { e.preventDefault(); setTool('select'); return; }
+		if (e.key === 'p' || e.key === 'P') { e.preventDefault(); setTool('pencil'); return; }
+		if (e.key === 'l' || e.key === 'L') { e.preventDefault(); setTool('line'); return; }
+		if (e.key === 't' || e.key === 'T') { e.preventDefault(); setTool('text'); return; }
+		if (e.key === 'r' || e.key === 'R') { e.preventDefault(); setTool('rect'); return; }
+		if (e.key === 'a' || e.key === 'A') { e.preventDefault(); setTool('arrow'); return; }
 
 		if (e.key === 'Escape') {
 			e.preventDefault();

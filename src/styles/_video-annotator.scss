@@ -115,7 +115,7 @@ $ob-vid-accent: #897cf2;
 	filter: drop-shadow(0 0 3px #fff) drop-shadow(0 0 1px #fff);
 }
 
-.ob-vid-livepath, .ob-vid-liveline {
+.ob-vid-livepath, .ob-vid-liveline, .ob-vid-liverect {
 	fill: none;
 	stroke-width: 4;
 	stroke-linecap: round;
@@ -129,9 +129,8 @@ $ob-vid-accent: #897cf2;
 .ob-vid-textinput {
 	position: absolute;
 	transform: translateY(-2px);
-	background: rgba(0, 0, 0, 0.5);
-	border: 1px solid rgba(255, 255, 255, 0.25);
-	border-radius: 4px;
+	background: transparent;
+	border: none;
 	padding: 3px 7px;
 	// Fixed width (set inline); text wraps to the next line within the box.
 	font-family: system-ui, sans-serif;
@@ -142,13 +141,14 @@ $ob-vid-accent: #897cf2;
 	overflow: hidden;
 	resize: none;
 	outline: none;
-	&.yellow { color: #facc15; }
-	&.red { color: #fb7185; }
-	&.green { color: #4ac582; }
+	&.yellow { color: #facc15; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+	&.red { color: #fb7185; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
+	&.green { color: #4ac582; text-shadow: 0 1px 2px rgba(0,0,0,0.7); }
 	&.black { 
 		color: #000000; 
-		background: rgba(255, 255, 255, 0.7);
-		border: 1px solid rgba(0, 0, 0, 0.3);
+		background: transparent;
+		border: none;
+		text-shadow: 0 1px 2px rgba(255,255,255,0.7), 0 0 4px rgba(255,255,255,0.5);
 	}
 }
 
@@ -185,6 +185,7 @@ $ob-vid-accent: #897cf2;
 	cursor: pointer;
 	&:hover { background: $ob-vid-bg3; color: $ob-vid-text; }
 	&.is-active { background: $ob-vid-accent; color: #fff; }
+	&.is-locked { box-shadow: inset 0 0 0 2px rgba(255,255,255,0.4); }
 }
 
 .ob-vid-toolsep {

@@ -103,6 +103,59 @@ export function renderMarkupSvg(markup: VideoMarkup | undefined, W: number, H: n
 		svg.appendChild(fo);
 	}
 
+	for (const r of markup.rects || []) {
+		const rect = document.createElementNS(SVG_NS, 'rect');
+		rect.setAttribute('x', String(r.x * W));
+		rect.setAttribute('y', String(r.y * H));
+		rect.setAttribute('width', String(r.w * W));
+		rect.setAttribute('height', String(r.h * H));
+		rect.setAttribute('fill', 'none');
+		rect.setAttribute('stroke', VIDEO_COLOR_HEX[r.color]);
+		rect.setAttribute('stroke-width', String(getWeight(r.weight)));
+		rect.setAttribute('stroke-linejoin', 'round');
+		rect.setAttribute('data-mid', r.id);
+		if (r.id === selectedId) rect.classList.add('is-selected');
+		svg.appendChild(rect);
+	}
+
+	for (const a of markup.arrows || []) {
+		const g = document.createElementNS(SVG_NS, 'g');
+		g.setAttribute('data-mid', a.id);
+		if (a.id === selectedId) g.classList.add('is-selected');
+		
+		const ln = document.createElementNS(SVG_NS, 'line');
+		const x1 = a.x1 * W, y1 = a.y1 * H, x2 = a.x2 * W, y2 = a.y2 * H;
+		ln.setAttribute('x1', String(x1));
+		ln.setAttribute('y1', String(y1));
+		ln.setAttribute('x2', String(x2));
+		ln.setAttribute('y2', String(y2));
+		ln.setAttribute('stroke', VIDEO_COLOR_HEX[a.color]);
+		ln.setAttribute('stroke-width', String(getWeight(a.weight)));
+		ln.setAttribute('stroke-linecap', 'round');
+		g.appendChild(ln);
+
+		// Arrowhead
+		const angle = Math.atan2(y2 - y1, x2 - x1);
+		const headLen = Math.max(10, getWeight(a.weight) * 4);
+		const a1 = angle - Math.PI / 6;
+		const a2 = angle + Math.PI / 6;
+		const hx1 = x2 - headLen * Math.cos(a1);
+		const hy1 = y2 - headLen * Math.sin(a1);
+		const hx2 = x2 - headLen * Math.cos(a2);
+		const hy2 = y2 - headLen * Math.sin(a2);
+		
+		const head = document.createElementNS(SVG_NS, 'path');
+		head.setAttribute('d', `M ${hx1} ${hy1} L ${x2} ${y2} L ${hx2} ${hy2}`);
+		head.setAttribute('fill', 'none');
+		head.setAttribute('stroke', VIDEO_COLOR_HEX[a.color]);
+		head.setAttribute('stroke-width', String(getWeight(a.weight)));
+		head.setAttribute('stroke-linecap', 'round');
+		head.setAttribute('stroke-linejoin', 'round');
+		g.appendChild(head);
+		
+		svg.appendChild(g);
+	}
+
 	return svg;
 }
 
