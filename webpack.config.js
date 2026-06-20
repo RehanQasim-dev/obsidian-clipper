@@ -48,7 +48,8 @@ module.exports = (env, argv) => {
 			style: './src/style.scss',
 			highlighter: './src/highlighter.scss',
 			reader: './src/reader.scss',
-			'reader-script': './src/reader-script.ts'
+			'reader-script': './src/reader-script.ts',
+			diagram: './src/diagram.tsx'
 		},
 		output: {
 			path: path.resolve(__dirname, outputDir),
@@ -102,6 +103,12 @@ module.exports = (env, argv) => {
 		module: {
 			rules: [
 				{
+					test: /\.m?js$/,
+					resolve: {
+						fullySpecified: false,
+					},
+				},
+				{
 					test: /\.tsx?$/,
 					use: [
 						{
@@ -148,13 +155,16 @@ module.exports = (env, argv) => {
 					{ from: "src/settings.html", to: "settings.html" },
 					{ from: "src/highlights.html", to: "highlights.html" },
 					{ from: "src/reader.html", to: "reader.html" },
+					{ from: "src/diagram.html", to: "diagram.html" },
 					{ from: "src/icons", to: "icons" },
 					{ from: "node_modules/webextension-polyfill/dist/browser-polyfill.min.js", to: "browser-polyfill.min.js" },
 					{ from: "src/flatten-shadow-dom.js", to: "flatten-shadow-dom.js" },
 					{
 						from: 'src/_locales',
 						to: '_locales'
-					}
+					},
+					{ from: "node_modules/@excalidraw/excalidraw/dist/prod/index.css", to: "excalidraw.css" },
+					{ from: "node_modules/@excalidraw/excalidraw/dist/prod/fonts", to: "fonts" }
 				],
 			}),
 			new MiniCssExtractPlugin({

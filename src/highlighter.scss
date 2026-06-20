@@ -834,45 +834,51 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 16px; }
 			}
 		}
 
-		button {
+		.obsidian-comment-editor-actions {
 			position: absolute;
 			bottom: 4px;
 			right: 4px;
 			display: flex;
+			gap: 4px;
 			align-items: center;
-			justify-content: center;
-			background: transparent;
-			border: none;
-			color: var(--ob-muted);
-			cursor: pointer;
-			padding: 4px;
-			border-radius: 4px;
 
-			&:hover {
-				color: var(--ob-text);
-			}
-
-			&.obsidian-comment-save-new svg {
-				background: rgba(255, 255, 255, 0.08);
+			button {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				background: transparent;
+				border: none;
 				color: var(--ob-muted);
-				border-radius: 50%;
-				padding: 2px;
-				width: 18px;
-				height: 18px;
-				transition: all 0.2s ease;
-			}
+				cursor: pointer;
+				padding: 4px;
+				border-radius: 4px;
 
-			&.obsidian-comment-delete {
-				color: var(--ob-muted);
+				&:hover {
+					color: var(--ob-text);
+				}
+
+				&.obsidian-comment-save-new svg {
+					background: rgba(255, 255, 255, 0.08);
+					color: var(--ob-muted);
+					border-radius: 50%;
+					padding: 2px;
+					width: 18px;
+					height: 18px;
+					transition: all 0.2s ease;
+				}
+
+				&.obsidian-comment-delete {
+					color: var(--ob-muted);
+				}
 			}
 		}
 
-		&.has-text button.obsidian-comment-save-new svg {
+		&.has-text .obsidian-comment-editor-actions button.obsidian-comment-save-new svg {
 			background: #895DF4 !important;
 			color: #ffffff !important;
 		}
 
-		&.has-text button.obsidian-comment-save-new:hover svg {
+		&.has-text .obsidian-comment-editor-actions button.obsidian-comment-save-new:hover svg {
 			background: #734AD9 !important;
 		}
 	}

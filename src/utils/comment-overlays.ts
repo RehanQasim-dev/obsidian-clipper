@@ -13,6 +13,24 @@ let expandedCommentIndexes = new Set<string>(); // highlightId-index
 let editingNoteKey: string | null = null; // highlightId-index
 let singleClickTimer: number | null = null; // disambiguates single- vs double-click on a comment
 
+browser.storage.onChanged.addListener((changes, area) => {
+	if (area === 'local' && changes.diagrams) {
+		const newDiagrams = changes.diagrams.newValue || {};
+		let updated = false;
+		for (const [id, data] of Object.entries(newDiagrams)) {
+			if ((data as any).dataUrl && localDiagramCache.get(id) !== (data as any).dataUrl) {
+				localDiagramCache.set(id, (data as any).dataUrl);
+				updated = true;
+			}
+		}
+		if (updated) {
+			// Clear cache to force image src update
+			activeCommentBoxes.forEach((box) => boxRenderCache.delete(box));
+			renderCommentBoxes();
+		}
+	}
+});
+
 // Last innerHTML rendered into each box. renderCommentBoxes() runs on every
 // highlight mutation, storage sync, scroll-driven reapply, etc. Rebuilding
 // innerHTML every time wipes an open editor (losing in-progress text + focus)
@@ -22,6 +40,8 @@ let singleClickTimer: number | null = null; // disambiguates single- vs double-c
 // when the rendered content is unchanged keeps the editor DOM stable so typing
 // and saving work reliably. Keyed by box element so entries GC with the box.
 const boxRenderCache = new WeakMap<HTMLElement, string>();
+
+const localDiagramCache = new Map<string, string>();
 
 // --- Group handling ----------------------------------------------------------
 // A multi-block selection (e.g. several bullet points) produces one highlight
@@ -380,6 +400,19 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 				const text = textarea.value.trim();
 				saveComment(highlight.id, text);
 			}
+		} else if (target.closest('.obsidian-comment-diagram-new')) {
+			// Save a new empty diagram comment, then open the editor
+			const diagramId = 'd' + Math.random().toString(36).substring(2, 9);
+			saveComment(highlight.id, `<!--diagram:${diagramId}-->`);
+			const url = browser.runtime.getURL(`diagram.html?id=${diagramId}`);
+			window.open(url, '_blank', 'width=1200,height=800');
+		} else if (target.closest('.obsidian-comment-diagram-img')) {
+			const img = target.closest('.obsidian-comment-diagram-img') as HTMLImageElement;
+			const diagramId = img.dataset.diagramId;
+			if (diagramId) {
+				const url = browser.runtime.getURL(`diagram.html?id=${diagramId}`);
+				window.open(url, '_blank', 'width=1200,height=800');
+			}
 		} else if (target.closest('.obsidian-comment-text')) {
 			const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 			const noteIndex = textEl.dataset.index;
@@ -515,9 +548,14 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 	const editorHtml = `
 		<div class="obsidian-comment-editor sleek-input">
 			<textarea class="new-comment-textarea" placeholder="${notes.length > 0 ? 'Reply…' : 'Add a comment…'}" rows="1"></textarea>
-			<button class="obsidian-comment-save-new" aria-label="Submit">
-				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
-			</button>
+			<div class="obsidian-comment-editor-actions">
+				<button class="obsidian-comment-diagram-new" aria-label="Add Diagram" title="Add Diagram">
+					<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+				</button>
+				<button class="obsidian-comment-save-new" aria-label="Submit">
+					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
+				</button>
+			</div>
 		</div>
 	`;
 
@@ -528,18 +566,40 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 			const isEditingThisNote = editingNoteKey === `${highlight.id}-${index}`;
 			const parsed = parseNoteString(note);
 
-			let displayHtml = escapeHtml(parsed.text);
-			displayHtml = renderInlineMarkdown(displayHtml);
-			displayHtml = displayHtml.replace(/(^|\s)(#[a-zA-Z0-9_-]+)/g, '$1<span class="obsidian-inline-tag">$2</span>');
+			let displayHtml = '';
+			const diagramMatch = parsed.text.match(/^<!--diagram:([A-Za-z0-9_-]+)-->$/);
+			if (diagramMatch) {
+				const diagramId = diagramMatch[1];
+				const src = localDiagramCache.get(diagramId) || '';
+				displayHtml = `<img class="obsidian-comment-diagram-img" data-diagram-id="${diagramId}" style="width: 100%; border-radius: 4px; cursor: pointer; display: block;" src="${src}" alt="Diagram"/>`;
+				if (!src) {
+					// Trigger fetch without waiting
+					browser.storage.local.get('diagrams').then(res => {
+						const diagrams = (res.diagrams || {}) as Record<string, any>;
+						const d = diagrams[diagramId];
+						if (d && d.dataUrl) {
+							localDiagramCache.set(diagramId, d.dataUrl);
+							boxRenderCache.delete(box);
+							renderCommentBoxes();
+						}
+					});
+				}
+			} else {
+				displayHtml = escapeHtml(parsed.text);
+				displayHtml = renderInlineMarkdown(displayHtml);
+				displayHtml = displayHtml.replace(/(^|\s)(#[a-zA-Z0-9_-]+)/g, '$1<span class="obsidian-inline-tag">$2</span>');
+			}
 
 			if (isEditingThisNote) {
 				html += `
 					<div class="obsidian-comment-item">
 						<div class="obsidian-comment-editor sleek-input is-editing">
 							<textarea class="edit-comment-textarea" rows="1">${escapeHtml(parsed.text)}</textarea>
-							<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete">
-								<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-							</button>
+							<div class="obsidian-comment-editor-actions">
+								<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete">
+									<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+								</button>
+							</div>
 						</div>
 					</div>
 				`;
