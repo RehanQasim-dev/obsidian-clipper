@@ -106,7 +106,7 @@ export class SwatchPopup {
 	}
 
 	private onKey(e: KeyboardEvent): void {
-		if (!this.shown) return;
+		if (!this.shown || e.ctrlKey || e.metaKey || e.altKey) return;
 		switch (e.key) {
 			case '1':
 				e.preventDefault();
