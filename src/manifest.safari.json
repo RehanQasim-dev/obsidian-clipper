@@ -46,7 +46,7 @@
 	],
 	"web_accessible_resources": [
 		{
-			"resources": ["reader.css", "reader-script.js", "browser-polyfill.min.js", "style.css", "side-panel.html", "flatten-shadow-dom.js", "highlighter.css", "diagram.html", "diagram.js"],
+			"resources": ["reader.css", "reader-script.js", "browser-polyfill.min.js", "style.css", "side-panel.html", "flatten-shadow-dom.js", "highlighter.css", "diagram.html", "diagram.js", "video-excalidraw.html", "video-excalidraw.js", "excalidraw.css"],
 			"extension_ids": ["*"],
 			"matches": [ "*://*/*" ]
 		}

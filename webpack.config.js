@@ -49,7 +49,8 @@ module.exports = (env, argv) => {
 			highlighter: './src/highlighter.scss',
 			reader: './src/reader.scss',
 			'reader-script': './src/reader-script.ts',
-			diagram: './src/diagram.tsx'
+			diagram: './src/diagram.tsx',
+			'video-excalidraw': './src/video-excalidraw.tsx'
 		},
 		output: {
 			path: path.resolve(__dirname, outputDir),
@@ -94,7 +95,7 @@ module.exports = (env, argv) => {
 			outputModule: false,
 		},
 		resolve: {
-			extensions: ['.ts', '.js'],
+			extensions: ['.ts', '.tsx', '.js'],
 			alias: {
 				'./utils/browser-polyfill': path.resolve(__dirname, 'node_modules/webextension-polyfill/dist/browser-polyfill.min.js'),
 				'../utils/browser-polyfill': path.resolve(__dirname, 'node_modules/webextension-polyfill/dist/browser-polyfill.min.js')
@@ -156,6 +157,7 @@ module.exports = (env, argv) => {
 					{ from: "src/highlights.html", to: "highlights.html" },
 					{ from: "src/reader.html", to: "reader.html" },
 					{ from: "src/diagram.html", to: "diagram.html" },
+					{ from: "src/video-excalidraw.html", to: "video-excalidraw.html" },
 					{ from: "src/icons", to: "icons" },
 					{ from: "node_modules/webextension-polyfill/dist/browser-polyfill.min.js", to: "browser-polyfill.min.js" },
 					{ from: "src/flatten-shadow-dom.js", to: "flatten-shadow-dom.js" },

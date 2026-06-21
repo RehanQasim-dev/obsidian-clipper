@@ -193,26 +193,65 @@ function buildOverlay() {
 		frameInner = document.createElement('div');
 		frameInner.className = 'ob-vid-frame-inner';
 		frameInner.style.aspectRatio = `${item.frame.w} / ${item.frame.h}`;
+		frameInner.style.position = 'relative';
 
-		frameImg = document.createElement('img');
-		frameImg.className = 'ob-vid-frame';
-		frameImg.src = item.frame.dataUrl;
-		frameInner.appendChild(frameImg);
+		if (mode === 'draw') {
+			const iframe = document.createElement('iframe');
+			iframe.src = browser.runtime.getURL('video-excalidraw.html');
+			iframe.style.position = 'absolute';
+			iframe.style.top = '0';
+			iframe.style.left = '0';
+			iframe.style.width = '100%';
+			iframe.style.height = '100%';
+			iframe.style.border = 'none';
+			iframe.style.zIndex = '10';
+			iframe.allow = 'clipboard-read; clipboard-write';
+			frameInner.appendChild(iframe);
+			
+			const onMessage = (e: MessageEvent) => {
+				if (e.data?.type === 'EXCALIDRAW_READY') {
+					iframe.contentWindow?.postMessage({
+						type: 'INIT_FRAME',
+						dataUrl: item?.frame?.dataUrl,
+						w: item?.frame?.w,
+						h: item?.frame?.h
+					}, '*');
+				} else if (e.data?.type === 'SAVE_ANNOTATION') {
+					item!.excalidrawScene = e.data.sceneData;
+					if (e.data.sceneData.bakedDataUrl && item?.frame) {
+						item.frame.dataUrl = e.data.sceneData.bakedDataUrl;
+					}
+					window.removeEventListener('message', onMessage);
+					if (e.data.action === 'comment') {
+						persist().then(goToComment);
+					} else {
+						saveAndClose();
+					}
+				} else if (e.data?.type === 'DISCARD_ANNOTATION') {
+					window.removeEventListener('message', onMessage);
+					teardown(false);
+				}
+			};
+			window.addEventListener('message', onMessage);
+		} else {
+			frameImg = document.createElement('img');
+			frameImg.className = 'ob-vid-frame';
+			frameImg.src = item.frame.dataUrl;
+			frameInner.appendChild(frameImg);
 
-		committedHolder = document.createElement('div');
-		committedHolder.className = 'ob-vid-markup';
-		frameInner.appendChild(committedHolder);
+			committedHolder = document.createElement('div');
+			committedHolder.className = 'ob-vid-markup';
+			frameInner.appendChild(committedHolder);
+		}
 
 		frameWrap.appendChild(frameInner);
 	}
 
 	if (mode === 'draw') {
-		buildDrawTools();
 		const hint = document.createElement('div');
 		hint.className = 'ob-vid-hint';
-		hint.innerHTML = '<b>Enter</b> save · <b>N</b> comment · <b>Esc</b> select / exit';
+		hint.innerHTML = '<b>Enter</b> save · <b>N / C</b> comment · <b>Esc</b> cancel';
 		frameWrap.appendChild(hint);
-		attachDrawHandlers();
 	}
 
 	// Chat panel

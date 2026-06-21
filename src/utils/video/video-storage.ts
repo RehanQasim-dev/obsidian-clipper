@@ -89,6 +89,7 @@ export interface VideoItem {
 	quote?: string;               // exact highlighted transcript text
 	color?: VideoColor;           // highlight color
 	anchor?: TranscriptAnchor;    // for repainting the highlight inline on reopen
+	excalidrawScene?: any;        // Excalidraw scene elements/appState when using Excalidraw
 }
 
 export interface VideoAnnotationData {
