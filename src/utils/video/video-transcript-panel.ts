@@ -51,6 +51,11 @@ export function isTranscriptPanelActive(): boolean {
 	return active;
 }
 
+// Close the panel programmatically (e.g. to switch to another panel).
+export function closeTranscriptPanel(): void {
+	if (active) teardown();
+}
+
 export async function startTranscriptAnnotate(): Promise<void> {
 	if (active || isCommentsActive() || !isYouTubeWatchPage()) return;
 	video = getVideoElement();

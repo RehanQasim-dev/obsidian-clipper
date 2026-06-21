@@ -21,6 +21,11 @@ $ob-vid-accent: #897cf2;
 	box-sizing: border-box;
 	animation: ob-vid-fade-in 0.18s ease;
 
+	// In draw mode the pooled Excalidraw iframe (a separate element) owns all
+	// interaction; the overlay is just a positioning shell, so let clicks pass
+	// straight through to the iframe.
+	&.mode-draw { pointer-events: none; }
+
 	*, *::before, *::after { box-sizing: border-box; }
 
 	&.is-closing { opacity: 0; transition: opacity 0.2s ease; }

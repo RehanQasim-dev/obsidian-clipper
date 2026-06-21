@@ -144,11 +144,20 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   forces an immediate reconcile and shows last-synced time / errors. See `GOOGLE_DRIVE_SYNC.md`.
 
 ### 3.6 YouTube video frame notes (lectures)
-- On a YouTube watch page, **`S`** captures the current frame: the video pauses, the frame freezes
-  full-size, and a small draw toolbar appears (freehand pencil, straight **line** that snaps to 45°
-  with **Shift**, click-to-place **text**, color swatches). A hint line reads `Enter save · C comment · Esc cancel`.
-- **`Enter`** saves the frame (with its markup) and resumes; **`C`** saves and advances to the comment
-  step; **`Esc`** discards.
+- On a YouTube watch page, **`S`** captures the current frame and the video pauses. The draw step is a
+  full **Excalidraw** editor hosted in an iframe (`src/video-excalidraw.tsx` / `.html`), with a native
+  top toolbar and a custom bottom **properties bar** (color/fill/stroke/opacity, cycled by keyboard).
+- **Layout**: the iframe covers the video's content rect; the paused video behind is **dimmed** and the
+  captured frame is placed as a centred card in the **region between a reserved top band and bottom band**,
+  so the toolbar and properties bar never overlap the drawing. The frame is positioned by explicit
+  zoom/scroll (not `scrollToContent`/`fitToViewport`) so it lands deterministically.
+- **Performance**: the Excalidraw iframe is created **once per watch-page session and pooled** — warmed on
+  load / `yt-navigate-finish`, parented to the player container (which YouTube fullscreens, so it never
+  needs reparenting). Each `S` resets the scene and feeds the new frame via `INIT_FRAME`; the iframe stays
+  hidden until it posts `FRAME_RENDERED`, so no blank canvas flashes.
+- **`Enter`** saves the frame (Excalidraw exports a baked composite back to `item.frame.dataUrl`) and
+  resumes; **`C`/`N`** saves and advances to the comment step; **`Esc`** discards. Host-side keys are
+  forwarded to the iframe (`TRIGGER_SAVE`/`COMMENT`/`DISCARD`) so save always runs through the export.
 - **Comment step**: the frame animates to a reduced size on the left and a fixed-width **slate chat
   panel** docks on the right (read-only frame). A "reply here" box posts messages (newest at bottom,
   long ones collapse after ~3 lines). One chat thread per frame. **`Esc`** closes and resumes.

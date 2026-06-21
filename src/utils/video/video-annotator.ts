@@ -71,8 +71,142 @@ let panel: HTMLElement | null = null;
 let msgsEl: HTMLElement | null = null;
 let inputEl: HTMLTextAreaElement | null = null;
 
+// --- Pooled Excalidraw iframe ------------------------------------------------
+// The Excalidraw bundle + React mount + canvas/font init is expensive, so we
+// keep ONE iframe alive for the whole watch-page session and reuse it for every
+// capture (resetting its scene each time). It's parented to the player
+// container (which is what YouTube fullscreens), so it renders in both windowed
+// and fullscreen without ever being reparented — moving an iframe reloads it,
+// which would throw away the warm state.
+let pooledIframe: HTMLIFrameElement | null = null;
+let pooledReady = false;   // EXCALIDRAW_READY received from the iframe
+let pendingInit = false;   // an INIT is queued, waiting on readiness
+
 export function isAnnotatorActive(): boolean {
 	return active;
+}
+
+// Create (once) and keep warm the reusable Excalidraw iframe. Safe to call
+// repeatedly; cheap no-op once mounted.
+export function warmAnnotator(): void {
+	const host = getPlayerContainer();
+	if (!host) return;
+	if (pooledIframe && pooledIframe.isConnected) return;
+	if (!pooledIframe) {
+		pooledIframe = document.createElement('iframe');
+		pooledIframe.src = browser.runtime.getURL('video-excalidraw.html');
+		pooledIframe.className = 'ob-vid-excali-frame';
+		pooledIframe.allow = 'clipboard-read; clipboard-write';
+		Object.assign(pooledIframe.style, {
+			// Absolute (relative to the player), NOT fixed: a fixed element paints
+			// above a fullscreened #movie_player but hit-tests *below* it, so pointer
+			// events fall through to YouTube. Absolute keeps it in the player's
+			// stacking subtree, clickable in both windowed and fullscreen.
+			position: 'absolute', border: 'none', display: 'none',
+			zIndex: '2147483647', background: 'transparent',
+		} as Partial<CSSStyleDeclaration>);
+		window.addEventListener('message', onPooledMessage, false);
+	}
+	pooledReady = false;
+	host.appendChild(pooledIframe);
+}
+
+function positionPooledIframe() {
+	if (!pooledIframe) return;
+	const r = videoContentRect();
+	if (!r) return;
+	// Coords are relative to the player (the iframe's offset parent), so they hold
+	// in both windowed and fullscreen.
+	const host = pooledIframe.offsetParent as HTMLElement | null
+		?? getPlayerContainer();
+	const hr = host?.getBoundingClientRect();
+	const left = hr ? r.left - hr.left : r.left;
+	const top = hr ? r.top - hr.top : r.top;
+	Object.assign(pooledIframe.style, {
+		left: `${left}px`, top: `${top}px`,
+		width: `${r.w}px`, height: `${r.h}px`,
+	} as Partial<CSSStyleDeclaration>);
+}
+
+// Show the (already-warm) iframe for a capture: position it, hide it until the
+// frame is painted, then feed it the captured frame.
+function showPooledIframe() {
+	warmAnnotator();
+	if (!pooledIframe || !item?.frame) return;
+	// Keep it invisible (but laid out) until FRAME_RENDERED arrives, so the user
+	// never sees a blank/loading Excalidraw canvas.
+	pooledIframe.style.display = 'block';
+	pooledIframe.style.visibility = 'hidden';
+	positionPooledIframe();
+	pendingInit = true;
+	if (pooledReady) sendInitFrame();
+	// Fallback: reveal even if FRAME_RENDERED is somehow missed, so the iframe
+	// can never get stuck invisible.
+	const my = session;
+	setTimeout(() => {
+		if (session === my && active && mode === 'draw' && pooledIframe && pooledIframe.style.visibility === 'hidden') {
+			pooledIframe.style.visibility = 'visible';
+			pooledIframe.contentWindow?.focus();
+		}
+	}, 700);
+}
+
+function sendInitFrame() {
+	if (!pooledIframe || !item?.frame) return;
+	// Note: pendingInit stays true until FRAME_RENDERED — the warm iframe can
+	// re-mount when first shown, dropping this message, so we must re-send on the
+	// next EXCALIDRAW_READY.
+	pooledIframe.contentWindow?.postMessage({
+		type: 'INIT_FRAME',
+		dataUrl: item.frame.dataUrl,
+		w: item.frame.w,
+		h: item.frame.h,
+	}, '*');
+}
+
+function hidePooledIframe() {
+	if (!pooledIframe) return;
+	pooledIframe.style.display = 'none';
+	pooledIframe.style.visibility = 'hidden';
+	// Return focus to the player. While the iframe had focus, key events fired in
+	// its (separate) browsing context, so neither YouTube's shortcuts (F, etc.)
+	// nor our window-level S/N/T listener would fire until the user clicked back
+	// into the page. Refocusing the player container releases that trap.
+	try { (getPlayerContainer() as HTMLElement | null)?.focus({ preventScroll: true }); } catch { /* ignore */ }
+}
+
+// Forward a host-side key (when focus isn't already inside the iframe) to the
+// iframe so save/comment/discard always run through Excalidraw's export path.
+function triggerIframe(type: 'TRIGGER_SAVE' | 'TRIGGER_COMMENT' | 'TRIGGER_DISCARD') {
+	pooledIframe?.contentWindow?.postMessage({ type }, '*');
+}
+
+function onPooledMessage(e: MessageEvent) {
+	const d = e.data;
+	if (!d || !pooledIframe) return;
+	if (d.type === 'EXCALIDRAW_READY') {
+		pooledReady = true;
+		// Re-send on every READY: a remount (e.g. the first show after warm) drops
+		// the prior INIT_FRAME, and only a fresh READY tells us the new mount is
+		// listening again.
+		if (pendingInit && active && mode === 'draw') sendInitFrame();
+	} else if (d.type === 'FRAME_RENDERED') {
+		pendingInit = false;
+		if (active && mode === 'draw' && pooledIframe) {
+			pooledIframe.style.visibility = 'visible';
+			pooledIframe.contentWindow?.focus();
+		}
+	} else if (d.type === 'SAVE_ANNOTATION') {
+		if (!active || !item) return;
+		item.excalidrawScene = d.sceneData;
+		if (d.sceneData?.bakedDataUrl && item.frame) {
+			item.frame.dataUrl = d.sceneData.bakedDataUrl;
+		}
+		if (d.action === 'comment') persist().then(goToComment);
+		else saveAndClose();
+	} else if (d.type === 'DISCARD_ANNOTATION') {
+		if (active) teardown(false);
+	}
 }
 
 // --- Public entry points -----------------------------------------------------
@@ -152,14 +286,14 @@ function mountTarget(): HTMLElement {
 	return (document.fullscreenElement as HTMLElement | null) || getPlayerContainer() || document.body;
 }
 
-function positionRoot() {
-	if (!root || !video) return;
+// The <video> element box can be larger than the actual picture (letterbox bars
+// when the screen/player aspect differs from the video). Fit the video's
+// intrinsic aspect into the element box to get the true content rectangle, so
+// the overlay (and the iframe over it) covers exactly the visible picture — no
+// dead margins to "click into nothing".
+function videoContentRect(): { left: number; top: number; w: number; h: number } | null {
+	if (!video) return null;
 	const el = video.getBoundingClientRect();
-	// The <video> element box can be larger than the actual picture (letterbox
-	// bars when the screen/player aspect differs from the video). Fit the video's
-	// intrinsic aspect into the element box to get the true content rectangle, so
-	// the overlay (and the drawing surface that fills it) covers exactly the
-	// visible picture — no dead margins to "click into nothing".
 	let { left, top, width: w, height: h } = el;
 	const vw = video.videoWidth, vh = video.videoHeight;
 	if (vw > 0 && vh > 0) {
@@ -170,10 +304,17 @@ function positionRoot() {
 		left = el.left + (el.width - w) / 2;
 		top = el.top + (el.height - h) / 2;
 	}
-	root.style.left = `${left}px`;
-	root.style.top = `${top}px`;
-	root.style.width = `${w}px`;
-	root.style.height = `${h}px`;
+	return { left, top, w, h };
+}
+
+function positionRoot() {
+	if (!root) return;
+	const r = videoContentRect();
+	if (!r) return;
+	root.style.left = `${r.left}px`;
+	root.style.top = `${r.top}px`;
+	root.style.width = `${r.w}px`;
+	root.style.height = `${r.h}px`;
 }
 
 function buildOverlay() {
@@ -196,43 +337,8 @@ function buildOverlay() {
 		frameInner.style.position = 'relative';
 
 		if (mode === 'draw') {
-			const iframe = document.createElement('iframe');
-			iframe.src = browser.runtime.getURL('video-excalidraw.html');
-			iframe.style.position = 'absolute';
-			iframe.style.top = '0';
-			iframe.style.left = '0';
-			iframe.style.width = '100%';
-			iframe.style.height = '100%';
-			iframe.style.border = 'none';
-			iframe.style.zIndex = '10';
-			iframe.allow = 'clipboard-read; clipboard-write';
-			frameInner.appendChild(iframe);
-			
-			const onMessage = (e: MessageEvent) => {
-				if (e.data?.type === 'EXCALIDRAW_READY') {
-					iframe.contentWindow?.postMessage({
-						type: 'INIT_FRAME',
-						dataUrl: item?.frame?.dataUrl,
-						w: item?.frame?.w,
-						h: item?.frame?.h
-					}, '*');
-				} else if (e.data?.type === 'SAVE_ANNOTATION') {
-					item!.excalidrawScene = e.data.sceneData;
-					if (e.data.sceneData.bakedDataUrl && item?.frame) {
-						item.frame.dataUrl = e.data.sceneData.bakedDataUrl;
-					}
-					window.removeEventListener('message', onMessage);
-					if (e.data.action === 'comment') {
-						persist().then(goToComment);
-					} else {
-						saveAndClose();
-					}
-				} else if (e.data?.type === 'DISCARD_ANNOTATION') {
-					window.removeEventListener('message', onMessage);
-					teardown(false);
-				}
-			};
-			window.addEventListener('message', onMessage);
+			// Drawing happens in the pooled iframe (positioned over this rect by
+			// showPooledIframe / onReposition), not a per-session child iframe.
 		} else {
 			frameImg = document.createElement('img');
 			frameImg.className = 'ob-vid-frame';
@@ -247,13 +353,6 @@ function buildOverlay() {
 		frameWrap.appendChild(frameInner);
 	}
 
-	if (mode === 'draw') {
-		const hint = document.createElement('div');
-		hint.className = 'ob-vid-hint';
-		hint.innerHTML = '<b>Enter</b> save · <b>N / C</b> comment · <b>Esc</b> cancel';
-		frameWrap.appendChild(hint);
-	}
-
 	// Chat panel
 	panel = buildPanel();
 
@@ -266,6 +365,7 @@ function buildOverlay() {
 	mountTarget().appendChild(root);
 	positionRoot();
 	renderCommitted();
+	if (mode === 'draw') showPooledIframe();
 
 	window.addEventListener('resize', onReposition, true);
 	window.addEventListener('scroll', onReposition, true);
@@ -283,16 +383,20 @@ function buildOverlay() {
 
 function onReposition() {
 	positionRoot();
+	if (mode === 'draw') positionPooledIframe();
 	renderCommitted();
 }
 
 function onFullscreenChange() {
 	// Re-mount into the (new) fullscreen element / body so the overlay keeps
-	// rendering, then reposition.
+	// rendering, then reposition. The pooled iframe lives in the player container
+	// (which is what YouTube fullscreens), so it needs no reparenting — only
+	// repositioning.
 	if (!root) return;
 	const target = mountTarget();
 	if (root.parentElement !== target) target.appendChild(root);
 	positionRoot();
+	if (mode === 'draw') positionPooledIframe();
 	renderCommitted();
 }
 
@@ -1094,20 +1198,18 @@ function onKeyDown(e: KeyboardEvent) {
 		if (e.key === 'r' || e.key === 'R') { e.preventDefault(); setTool('rect'); return; }
 		if (e.key === 'a' || e.key === 'A') { e.preventDefault(); setTool('arrow'); return; }
 
+		// Drawing lives in the pooled iframe; normally it has focus and handles
+		// these itself. This fires only when focus is still on the host page —
+		// delegate to the iframe so save/comment always go through its export.
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			// A tool active → step back to select, keeping what was drawn. Already on
-			// select → discard the capture and resume the video.
-			if (currentTool !== 'select') setTool('select');
-			else teardown(false);
+			triggerIframe('TRIGGER_DISCARD');
 		} else if (e.key === 'Enter') {
-			// Save the frame (with markup) and resume.
 			e.preventDefault();
-			saveAndClose();
+			triggerIframe('TRIGGER_SAVE');
 		} else if (e.key === 'n' || e.key === 'N' || e.key === 'c' || e.key === 'C') {
-			// Open the comment panel for this frame.
 			e.preventDefault();
-			persist().then(goToComment);
+			triggerIframe('TRIGGER_COMMENT');
 		}
 	} else {
 		if (e.key === 'Escape') { e.preventDefault(); teardown(true); }
@@ -1138,6 +1240,9 @@ function teardown(save: boolean, resume = true) {
 	// fullscreen. A short delay keeps the lock through the whole key press so only
 	// the overlay closes; a later Escape (lock released) exits fullscreen.
 	setTimeout(unlockEscape, 400);
+	// Hide (don't destroy) the pooled iframe so it stays warm for the next capture.
+	hidePooledIframe();
+	pendingInit = false;
 	window.removeEventListener('resize', onReposition, true);
 	window.removeEventListener('scroll', onReposition, true);
 	document.removeEventListener('fullscreenchange', onFullscreenChange, true);

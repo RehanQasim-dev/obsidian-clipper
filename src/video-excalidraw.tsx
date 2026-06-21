@@ -23,6 +23,12 @@ function App() {
 	const [tempSelectedValue, setTempSelectedValue] = useState<any>(null);
 	const [activeToolType, setActiveToolType] = useState<string>('selection');
 	
+	// Vertical bands (px) reserved at the top/bottom of the iframe for the native
+	// toolbar and our properties bar — the captured frame is fit into the region
+	// between them so nothing overlaps the drawing.
+	const TOP_BAND = 40;
+	const BOTTOM_BAND = 40;
+
 	useEffect(() => {
 		const handleMessage = (e: MessageEvent) => {
 			if (e.data?.type === 'INIT_FRAME') {
@@ -42,36 +48,55 @@ function App() {
 	}, [excalidrawAPI]);
 
 	useEffect(() => {
-		if (excalidrawAPI && frameDataUrl) {
-			const fileId = 'frame-img';
-			fetch(frameDataUrl)
-				.then(res => res.blob())
-				.then(blob => {
-					const reader = new FileReader();
-					reader.onload = () => {
-						const dataURL = reader.result as string;
-						excalidrawAPI.addFiles([{
-							id: fileId, dataURL, mimeType: 'image/jpeg',
-							created: Date.now(), lastRetrieved: Date.now()
-						}]);
-						
-						const elements = [{
-							type: 'image', version: 1, versionNonce: Date.now(), isDeleted: false,
-							id: 'bg-image', fillStyle: 'hachure', strokeWidth: 1, strokeStyle: 'solid',
-							roughness: 1, opacity: 100, angle: 0, x: 0, y: 0,
-							width: frameSize.w, height: frameSize.h, seed: 1, groupIds: [],
-							frameId: null, roundness: null, boundElements: [], updated: Date.now(),
-							link: null, locked: true, fileId: fileId, scale: [1, 1]
-						}];
-						
-						excalidrawAPI.updateScene({ elements });
-						setTimeout(() => {
-							excalidrawAPI.scrollToContent(elements, { fitToViewport: true });
-							excalidrawAPI.setActiveTool({ type: 'freedraw' });
-						}, 100);
-					};
-					reader.readAsDataURL(blob);
-				});
+		if (!excalidrawAPI || !frameDataUrl) return;
+		try {
+		const fileId = 'frame-img-' + Date.now();
+
+		// Reset any prior scene first — the iframe is pooled and reused across
+		// captures, so we must clear the previous frame + drawings.
+		excalidrawAPI.updateScene({ elements: [] });
+
+		// The captured JPEG is already a dataURL: hand it straight to Excalidraw,
+		// no fetch→blob→FileReader round-trip.
+		excalidrawAPI.addFiles([{
+			id: fileId, dataURL: frameDataUrl, mimeType: 'image/jpeg',
+			created: Date.now(), lastRetrieved: Date.now()
+		}]);
+
+		const elements = [{
+			type: 'image', version: 1, versionNonce: Date.now(), isDeleted: false,
+			id: 'bg-image', fillStyle: 'hachure', strokeWidth: 1, strokeStyle: 'solid',
+			roughness: 1, opacity: 100, angle: 0, x: 0, y: 0,
+			width: frameSize.w, height: frameSize.h, seed: 1, groupIds: [],
+			frameId: null, roundness: null, boundElements: [], updated: Date.now(),
+			link: null, locked: true, fileId: fileId, scale: [1, 1]
+		}];
+
+		// Place the frame deterministically (no fitToViewport, which pads/scales
+		// unpredictably): fit it into the region between the top/bottom bands and
+		// lock zoom+scroll so scene units map 1:1 onto the visible picture.
+		const W = window.innerWidth, H = window.innerHeight;
+		const regionH = Math.max(1, H - TOP_BAND - BOTTOM_BAND);
+		const zoom = Math.min(W / frameSize.w, regionH / frameSize.h);
+		const dispW = frameSize.w * zoom, dispH = frameSize.h * zoom;
+		const offX = (W - dispW) / 2;
+		const offY = TOP_BAND + (regionH - dispH) / 2;
+
+		excalidrawAPI.updateScene({
+			elements,
+			appState: { zoom: { value: zoom }, scrollX: offX / zoom, scrollY: offY / zoom }
+		});
+		excalidrawAPI.setActiveTool({ type: 'freedraw' });
+
+		// Tell the host the scene is set so it can reveal the iframe. Post
+		// immediately — the iframe is visibility:hidden while off-screen, and Chrome
+		// throttles requestAnimationFrame there, so a rAF-gated signal can never
+		// arrive. The scene is already applied synchronously above, so the first
+		// paint after the host flips visibility will show content.
+		window.parent.postMessage({ type: 'FRAME_RENDERED' }, '*');
+		} catch (err) {
+			console.error('[vid-excali] image setup failed', err);
+			window.parent.postMessage({ type: 'FRAME_RENDERED' }, '*');
 		}
 	}, [excalidrawAPI, frameDataUrl]);
 
@@ -262,8 +287,6 @@ function App() {
 		}
 	};
 
-	if (!frameDataUrl) return null;
-
 	const isShape = ['rectangle', 'diamond', 'ellipse'].includes(activeToolType);
 	const isRectangle = activeToolType === 'rectangle';
 	const isDiamond = activeToolType === 'diamond';
@@ -395,7 +418,7 @@ function App() {
 					onChange={handleExcalidrawChange}
 					zenModeEnabled={false}
 					viewModeEnabled={false}
-					theme="dark"
+					theme="light"
 					initialData={{
 						appState: {
 							currentItemStrokeColor: '#ffeb3b',
@@ -406,7 +429,7 @@ function App() {
 				/>
 			</div>
 			
-			<div className="custom-ui">
+			{frameDataUrl && <div className="custom-ui">
 				<div className="top-right-bar">
 					<button className="action-btn secondary" onClick={discard}>Esc Cancel</button>
 					<button className="action-btn secondary" onClick={() => save('comment')}>C Comment</button>
@@ -481,7 +504,7 @@ function App() {
 						<OptionGroup options={opacities} currentVal={appState.currentItemOpacity} propKey="currentItemOpacity" />
 					</div>
 				)}
-			</div>
+			</div>}
 		</>
 	);
 }

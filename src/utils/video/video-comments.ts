@@ -43,6 +43,11 @@ let listEl: HTMLElement | null = null;
 let inputEl: HTMLTextAreaElement | null = null;
 let openedFullscreen = false;
 
+// Close the panel programmatically (e.g. to switch to another panel).
+export function closeComments(): void {
+	if (active) teardown();
+}
+
 export function isCommentsActive(): boolean {
 	return active;
 }

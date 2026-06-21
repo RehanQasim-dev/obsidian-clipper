@@ -14,9 +14,9 @@ import { saveFile } from './utils/file-utils';
 import { debugLog } from './utils/debug';
 import { updateSidebarWidth, addResizeHandle, cleanupResizeHandlers } from './utils/iframe-resize';
 import { parseForClip } from './utils/clip-utils';
-import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly, isAnnotatorActive } from './utils/video/video-annotator';
-import { startTranscriptAnnotate as videoTranscript, isTranscriptPanelActive } from './utils/video/video-transcript-panel';
-import { isCommentsActive, addCommentOnlyNote } from './utils/video/video-comments';
+import { startCaptureAndDraw as videoCapture, startCommentOnly as videoCommentOnly, isAnnotatorActive, warmAnnotator } from './utils/video/video-annotator';
+import { startTranscriptAnnotate as videoTranscript, isTranscriptPanelActive, closeTranscriptPanel } from './utils/video/video-transcript-panel';
+import { isCommentsActive, addCommentOnlyNote, closeComments } from './utils/video/video-comments';
 
 declare global {
 	interface Window {
@@ -508,6 +508,14 @@ declare global {
 	// Call updateHasHighlights when the page loads
 	window.addEventListener('load', updateHasHighlights);
 
+	// Pre-warm the (heavy) Excalidraw iframe on watch pages so the first S-capture
+	// is instant. Idempotent; also re-warmed after YouTube's SPA navigations.
+	const maybeWarmVideo = () => {
+		if (isYouTubeWatch() && generalSettings.videoNotesEnabled !== false) warmAnnotator();
+	};
+	window.addEventListener('load', maybeWarmVideo);
+	document.addEventListener('yt-navigate-finish', maybeWarmVideo as EventListener);
+
 	// YouTube lecture-note keys (S/N/T) are intercepted in the CAPTURE phase on
 	// window so they run *before* YouTube's own document-level shortcut handlers
 	// (which would otherwise also fire — e.g. T toggling theater mode, N skipping
@@ -537,8 +545,17 @@ declare global {
 			return;
 		}
 
-		// A panel already owns the screen → just suppress the key, don't reopen.
-		if (isAnnotatorActive() || isCommentsActive() || isTranscriptPanelActive()) return;
+		const annot = isAnnotatorActive(), com = isCommentsActive(), trans = isTranscriptPanelActive();
+		if (annot || com || trans) {
+			// Pressing the key for the panel that's already open → just suppress it
+			// (don't toggle/reopen). Mid-capture (draw) we also stay put.
+			if (annot) return;
+			if (k === transKey && trans) return;
+			// A different panel's key → switch: close the open one, then open the
+			// requested panel below.
+			if (com) closeComments();
+			if (trans) closeTranscriptPanel();
+		}
 		ensureHighlighterCSS();
 		if (k === capKey) videoCapture();
 		else if (k === comKey) videoCommentOnly();
