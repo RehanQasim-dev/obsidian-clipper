@@ -4,6 +4,7 @@ import {
 import { renderMarkupSvg } from './video-markup';
 import { makeVideoNote, parseVideoNote, renderNoteHtml, formatVideoTime } from './video-notes';
 import { getVideoElement } from './youtube-detect';
+import { loadFrameImage } from './frame-store';
 import { engagePlayerStage, mountHost, unmountHost, disengagePlayerStage } from './video-player-stage';
 
 // Per-video "conversation" comment panel: a right-docked overlay listing every
@@ -140,7 +141,8 @@ function anchorHeader(item: VideoItem): HTMLElement {
 		const thumb = document.createElement('div');
 		thumb.className = 'ob-vidc-thumb';
 		const img = document.createElement('img');
-		img.src = item.frame.dataUrl;
+		if (item.frame.dataUrl) img.src = item.frame.dataUrl;
+		else loadFrameImage(item.id).then(u => { if (u) img.src = u; });
 		thumb.appendChild(img);
 		if (item.markup) {
 			const ov = document.createElement('div');

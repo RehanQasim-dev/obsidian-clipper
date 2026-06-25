@@ -27,7 +27,7 @@ This branch adds **live-webpage annotation** (highlights, comments, freehand dra
 | `src/utils/pencil-overlays.ts` | Freehand SVG drawing, stroke storage, color switching, marquee select/delete. |
 | `src/core/highlights.ts` | Highlights dashboard logic (sidebar tree, search, pagination, export/delete; folds in video annotations). |
 | `src/highlights.html` | Dashboard page markup. |
-| `src/utils/video/` | YouTube video notes: `youtube-detect` (player/SPA), `frame-capture` (canvas + screenshot fallback), `video-annotator` (in-page frame/draw overlay), `video-markup` (draw renderer), `video-storage`, `video-notes`, `video-transcript` (caption-track fetch/parse), `video-transcript-panel` (the `T` transcript-annotation panel), `video-comments` (per-video conversation comment panel). |
+| `src/utils/video/` | YouTube video notes: `youtube-detect` (player/SPA), `frame-capture` (canvas + screenshot fallback), `video-annotator` (in-page frame/draw overlay), `video-markup` (draw renderer), `video-storage` (metadata in `chrome.storage.local`), `frame-store` (frame JPEG blobs in IndexedDB; bg-owned, content scripts message in), `video-notes`, `video-transcript` (caption-track fetch/parse), `video-transcript-panel` (the `T` transcript-annotation panel), `video-comments` (per-video conversation comment panel). |
 | `src/core/video-highlights.ts` | Dashboard render path for video frame cards + timestamped notes. |
 | `src/utils/sync-engine.ts` | 3-way merge sync state machine, tombstones, push/pull (highlights, drawings, video). |
 | `src/utils/google-drive.ts` | Google Drive REST + OAuth (implicit grant), appdata file + binary blobs. |
@@ -81,7 +81,13 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - Frames are downscaled JPEG (~1280px). The frame **metadata + markup + notes + transcript items
   are Drive-synced**; the JPEG itself is stored as a **separate Drive appData blob** (referenced by
   `frame.driveId`) and never inlined into `clipper-sync.json`, so the merge payload stays small.
-  `frame.dataUrl` is local-only and lazily re-downloaded from the blob on devices that lack it.
+- **Frame JPEGs are NOT in the `video_annotations` blob.** They live locally in **IndexedDB**
+  (`utils/video/frame-store.ts`, DB `clipper`, store `frames`, keyed by item id) as real `Blob`s — so
+  editing a comment never re-serialises the images, and the metadata blob stays small. `frame.dataUrl`
+  is a **runtime-only** field, rehydrated on demand for display/export and stripped on every write.
+  IndexedDB is per-origin, so the **background owns the DB**: content scripts (page origin) route
+  `frameStore{Put,Get,Delete,Has}` messages through it; extension pages (dashboard) use it directly. A
+  one-time `migrateInlineFrames()` moves legacy inline base64 frames into IndexedDB on startup.
 
 ### Sync state
 - Local base snapshot: `sync_snapshot` (for 3-way reconcile).

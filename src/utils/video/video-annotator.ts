@@ -8,6 +8,7 @@ import {
 	getVideoElement, getVideoId, getVideoTitle, getPlayerContainer, isYouTubeWatchPage,
 } from './youtube-detect';
 import { captureFrame } from './frame-capture';
+import { saveFrameImage } from './frame-store';
 import { openComments, isCommentsActive } from './video-comments';
 
 // In-page overlay for capturing + marking up a YouTube frame and attaching a
@@ -342,7 +343,7 @@ function buildOverlay() {
 		} else {
 			frameImg = document.createElement('img');
 			frameImg.className = 'ob-vid-frame';
-			frameImg.src = item.frame.dataUrl;
+			if (item.frame.dataUrl) frameImg.src = item.frame.dataUrl;
 			frameInner.appendChild(frameImg);
 
 			committedHolder = document.createElement('div');
@@ -1106,6 +1107,9 @@ function focusInput() {
 async function persist() {
 	if (!item) return;
 	item.markup = markup.strokes.length || markup.lines.length || markup.texts.length ? markup : undefined;
+	// The JPEG goes to IndexedDB (keyed by item id); upsert strips it from the
+	// metadata blob. Save the image first so a reader can rehydrate it right after.
+	if (item.frame?.dataUrl) await saveFrameImage(item.id, item.frame.dataUrl);
 	await upsertVideoItem(watchUrl, videoId, videoTitle, item);
 }
 

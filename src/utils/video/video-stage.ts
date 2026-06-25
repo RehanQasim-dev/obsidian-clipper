@@ -26,7 +26,7 @@ export function buildFrameSide(frame: VideoFrameImage | null): HTMLElement {
 		inner.style.aspectRatio = `${frame.w} / ${frame.h}`;
 		const img = document.createElement('img');
 		img.className = 'ob-vid-frame';
-		img.src = frame.dataUrl;
+		if (frame.dataUrl) img.src = frame.dataUrl;
 		inner.appendChild(img);
 		wrap.appendChild(inner);
 	}

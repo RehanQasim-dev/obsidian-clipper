@@ -1,5 +1,6 @@
 import browser from './browser-polyfill';
 import { sanitizeFileName } from './string-utils';
+import { loadFrameImage } from './video/frame-store';
 import {
 	getConfig,
 	setConfig,
@@ -154,6 +155,14 @@ async function processUrl(cfg: ObsidianRestConfig, url: string): Promise<void> {
 
 	if (hasHighlights) blocks.push(buildPageBlock(title, url, hl!.highlights));
 	if (hasVideo) {
+		// Frame images live in IndexedDB now; rehydrate each frame's dataUrl so the
+		// serializer can embed it as an attachment.
+		for (const it of vid!.items) {
+			if (it.kind === 'frame' && it.frame && !it.frame.dataUrl) {
+				const u = await loadFrameImage(it.id);
+				if (u) it.frame.dataUrl = u;
+			}
+		}
 		const v = buildVideoBlock(title, url, vid!.videoId, vid!.items);
 		blocks.push(v.markdown);
 		attachments.push(...v.attachments);

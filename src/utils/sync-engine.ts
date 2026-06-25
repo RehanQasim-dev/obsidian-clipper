@@ -9,6 +9,7 @@ import {
 	createBinaryFile,
 	downloadBinaryFile,
 } from './google-drive';
+import { loadFrameImage, saveFrameImage, hasFrameImage } from './video/frame-store';
 // The 3-way merge logic is shared verbatim with the Obsidian plugin so both
 // reconcile clipper-sync.json identically. Types stay declared locally (they are
 // structurally identical to shared/merge's) to avoid touching the orchestrator.
@@ -210,28 +211,26 @@ async function doSync(interactive: boolean): Promise<void> {
 		};
 
 		// Upload any local frame image that doesn't yet have a Drive blob, stamping
-		// its `driveId` back into local storage. Also index every local image by item
-		// id so we can re-attach it after the merge without re-downloading.
-		const localImages = new Map<string, string>();
+		// its `driveId` back into local storage. The image bytes live in the frame
+		// store (IndexedDB), not in the metadata, so fetch them from there.
 		let uploadedNewBlob = false;
 		for (const url of Object.keys(localVideo)) {
 			for (const item of localVideo[url].items || []) {
 				const f = item.frame;
-				if (!f || !f.dataUrl) continue;
-				localImages.set(item.id, f.dataUrl);
-				if (!f.driveId) {
-					try {
-						const meta = await createBinaryFile(
-							`frame-${item.id}.jpg`,
-							f.dataUrl.split(',')[1] || '',
-							'image/jpeg',
-							interactive,
-						);
-						f.driveId = meta.id;
-						uploadedNewBlob = true;
-					} catch {
-						// Leave dataUrl-only; a later sync retries the upload.
-					}
+				if (!f || f.driveId) continue;
+				const dataUrl = await loadFrameImage(item.id);
+				if (!dataUrl) continue; // metadata-only / image not captured on this device
+				try {
+					const meta = await createBinaryFile(
+						`frame-${item.id}.jpg`,
+						dataUrl.split(',')[1] || '',
+						'image/jpeg',
+						interactive,
+					);
+					f.driveId = meta.id;
+					uploadedNewBlob = true;
+				} catch {
+					// Leave it; a later sync retries the upload.
 				}
 			}
 		}
@@ -313,28 +312,21 @@ async function doSync(interactive: boolean): Promise<void> {
 			break;
 		}
 
-		// Re-attach frame images for local storage: prefer the image we already had,
-		// otherwise lazily download the blob referenced by a remote-originated frame.
-		const mergedVideoLocal: VideoStorage = {};
+		// Make sure the local frame store holds every synced frame image: download
+		// any blob referenced by a frame we don't already have. The metadata stays
+		// image-free — images are rehydrated from the frame store on demand.
 		for (const url of Object.keys(mergedVideo)) {
-			const items: VideoItem[] = [];
 			for (const it of mergedVideo[url].items) {
 				const f = it.frame;
-				if (f && f.driveId) {
-					let dataUrl = localImages.get(it.id);
-					if (!dataUrl) {
-						try {
-							dataUrl = await downloadBinaryFile(f.driveId, interactive);
-						} catch {
-							/* image temporarily unavailable — keep metadata, fetch next sync */
-						}
+				if (f && f.driveId && !(await hasFrameImage(it.id))) {
+					try {
+						const dataUrl = await downloadBinaryFile(f.driveId, interactive);
+						if (dataUrl) await saveFrameImage(it.id, dataUrl);
+					} catch {
+						/* image temporarily unavailable — fetch next sync */
 					}
-					items.push(dataUrl ? { ...it, frame: { ...f, dataUrl } } : it);
-				} else {
-					items.push(it);
 				}
 			}
-			mergedVideoLocal[url] = { ...mergedVideo[url], items };
 		}
 
 		// Compare-and-swap guard: if a content script wrote new annotation data
@@ -360,8 +352,8 @@ async function doSync(interactive: boolean): Promise<void> {
 		if (JSON.stringify(mergedDrawings) !== JSON.stringify(local.drawings)) {
 			localWrite.drawings = mergedDrawings;
 		}
-		if (uploadedNewBlob || JSON.stringify(mergedVideoLocal) !== JSON.stringify(localVideo)) {
-			localWrite.video_annotations = mergedVideoLocal;
+		if (uploadedNewBlob || JSON.stringify(mergedVideo) !== JSON.stringify(localVideo)) {
+			localWrite.video_annotations = mergedVideo;
 		}
 		const newSnapshot: Snapshot = {
 			highlights: mergedHighlights,

@@ -1,5 +1,6 @@
 import browser from '../browser-polyfill';
 import { normalizeUrl } from '../highlighter';
+import { deleteFrameImage } from './frame-store';
 
 // Persistence for YouTube video annotations. Kept entirely separate from the
 // page-highlight (`highlights`) and pencil (`drawings`) stores so the dashboard
@@ -63,8 +64,13 @@ export interface VideoMarkup {
 }
 
 export interface VideoFrameImage {
-	dataUrl: string; // downscaled JPEG data URL
-	w: number;       // natural pixel size of the captured (downscaled) frame
+	// Runtime-only: the JPEG bytes live in IndexedDB (see frame-store.ts), keyed by
+	// the item id, and are rehydrated on demand for display/export — they are never
+	// persisted in the `video_annotations` blob. Optional because a freshly loaded
+	// item carries metadata only until something fetches the image.
+	dataUrl?: string;
+	driveId?: string; // Drive blob id for cross-device sync of the image
+	w: number;        // natural pixel size of the captured (downscaled) frame
 	h: number;
 }
 
@@ -142,9 +148,15 @@ export function upsertVideoItem(
 		if (title && !entry.title) entry.title = title;
 		entry.videoId = videoId || entry.videoId;
 		item.updatedAt = Date.now();
+		// The JPEG bytes live in IndexedDB (frame-store), never in this blob — strip
+		// any runtime dataUrl so it's never serialised here. Store a clone so the
+		// caller's in-memory item keeps its image for display.
+		const toStore: VideoItem = item.frame?.dataUrl
+			? { ...item, frame: { ...item.frame, dataUrl: undefined } }
+			: item;
 		const idx = entry.items.findIndex(i => i.id === item.id);
-		if (idx >= 0) entry.items[idx] = item;
-		else entry.items.push(item);
+		if (idx >= 0) entry.items[idx] = toStore;
+		else entry.items.push(toStore);
 		// Keep items ordered by video time so the dashboard timeline is correct.
 		entry.items.sort((a, b) => a.videoTime - b.videoTime);
 		all[key] = entry;
@@ -177,5 +189,7 @@ export function removeVideoItem(watchUrl: string, itemId: string): Promise<void>
 		if (entry.items.length === 0) delete all[key];
 		else all[key] = entry;
 		await browser.storage.local.set({ [STORAGE_KEY]: all });
+		// Drop the frame image too so IndexedDB doesn't accumulate orphans.
+		deleteFrameImage(itemId).catch(() => {});
 	});
 }

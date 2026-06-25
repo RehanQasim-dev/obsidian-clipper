@@ -3,6 +3,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { VideoItem } from '../utils/video/video-storage';
 import { renderMarkupSvg } from '../utils/video/video-markup';
 import { parseVideoNote, renderNoteHtml, formatVideoTime } from '../utils/video/video-notes';
+import { loadFrameImage } from '../utils/video/frame-store';
 
 dayjs.extend(relativeTime);
 
@@ -30,8 +31,9 @@ export function createVideoItemCard(
 
 		const img = document.createElement('img');
 		img.className = 'video-frame-img';
-		img.src = item.frame.dataUrl;
 		img.loading = 'lazy';
+		if (item.frame.dataUrl) img.src = item.frame.dataUrl;
+		else loadFrameImage(item.id).then(u => { if (u) img.src = u; });
 		fig.appendChild(img);
 
 		// Markup repainted over the frame at the frame's natural size; the SVG

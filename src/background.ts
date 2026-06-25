@@ -15,6 +15,7 @@ import {
 	testConnection as obsidianTestConnection,
 } from './utils/obsidian-sync';
 import { getConfig as getObsidianConfig, setConfig as setObsidianConfig } from './utils/obsidian-rest';
+import { handleFrameStoreMessage, migrateInlineFrames } from './utils/video/frame-store';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
 const YOUTUBE_INNERTUBE_RULE_ID = 9002;
@@ -409,9 +410,14 @@ if (browser.alarms) {
 }
 
 browser.runtime.onStartup.addListener(() => {
+	migrateInlineFrames().catch(() => {});
 	if (isSyncConfigured()) syncToDrive(false).catch(() => {});
 	obsidianFlush().catch(() => {});
 });
+
+// Move any legacy inline base64 frames into IndexedDB once (also covers a fresh
+// install/update, where onStartup may not fire for an already-running browser).
+migrateInlineFrames().catch(() => {});
 
 let lastDrivePollTime = 0;
 const DRIVE_POLL_COOLDOWN_MS = 5000;
@@ -499,6 +505,12 @@ browser.runtime.onMessage.addListener((request: unknown, sender: browser.Runtime
 	if (typeof request === 'object' && request !== null) {
 		const typedRequest = request as { action: string; isActive?: boolean; hasHighlights?: boolean; tabId?: number; text?: string; section?: string; readerUrl?: string };
 		
+		// Frame image store (IndexedDB) — content scripts (page origin) route here
+		// so they reach the single extension-origin DB shared with the dashboard.
+		if (handleFrameStoreMessage(typedRequest.action, typedRequest as any, sendResponse)) {
+			return true;
+		}
+
 		if (typedRequest.action === 'copy-to-clipboard' && typedRequest.text) {
 			// Use content script to copy to clipboard
 			browser.tabs.query({active: true, currentWindow: true}).then(async (tabs) => {
