@@ -550,9 +550,9 @@ body[data-ob-comment-theme="warm"] .obsidian-comment-box {
 	--ob-divider: rgba(255, 255, 255, 0.10);
 }
 
-body[data-ob-comment-size="small"] .obsidian-comment-box { --ob-font: 13px; }
-body[data-ob-comment-size="default"] .obsidian-comment-box { --ob-font: 14.5px; }
-body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 16px; }
+body[data-ob-comment-size="small"] .obsidian-comment-box { --ob-font: 14px; }
+body[data-ob-comment-size="default"] .obsidian-comment-box { --ob-font: 15.5px; }
+body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 
 .obsidian-comment-box {
 	// Theme palette — defaults to Slate so the box looks right even before the
@@ -562,7 +562,7 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 16px; }
 	--ob-muted: #8a93a6;
 	--ob-divider: rgba(255, 255, 255, 0.10);
 	// Comment text size (overridden per body[data-ob-comment-size]).
-	--ob-font: 14.5px;
+	--ob-font: 15.5px;
 
 	// Per-highlight color (RGB triplet) used for the permanent, color-matched
 	// border — so each box visibly belongs to its highlight's color. Overridden

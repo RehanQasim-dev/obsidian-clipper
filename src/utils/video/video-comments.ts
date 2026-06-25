@@ -207,9 +207,17 @@ function renderConversation() {
 			body.className = 'ob-vid-msg-body';
 			body.innerHTML = renderNoteHtml(parsed.text);
 			bubble.appendChild(body);
+
+			let timeEl: HTMLElement | null = null;
+			if (parsed.timestamp) {
+				timeEl = document.createElement('div');
+				timeEl.className = 'ob-vid-msg-time';
+				timeEl.textContent = clockTime(parsed.timestamp);
+				bubble.appendChild(timeEl);
+			}
+
 			requestAnimationFrame(() => {
 				if (body.scrollHeight - body.clientHeight > 4) {
-					bubble.classList.add('is-collapsible');
 					const more = document.createElement('button');
 					more.type = 'button';
 					more.className = 'ob-vid-msg-more';
@@ -219,7 +227,9 @@ function renderConversation() {
 						const open = bubble.classList.toggle('is-open');
 						more.textContent = open ? 'Show less' : 'Show more';
 					});
-					bubble.appendChild(more);
+					// Keep order: text · Show more · time.
+					if (timeEl) bubble.insertBefore(more, timeEl);
+					else bubble.appendChild(more);
 				}
 			});
 			msgs.appendChild(bubble);
@@ -266,6 +276,12 @@ function renderConversation() {
 			focused.scrollIntoView({ block: 'nearest' });
 		}
 	}, 60);
+}
+
+// Wall-clock time a comment was written, e.g. "1:02 PM".
+function clockTime(ts: number): string {
+	try { return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
+	catch { return ''; }
 }
 
 function autosizeInput() {

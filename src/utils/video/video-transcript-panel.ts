@@ -39,9 +39,10 @@ let root: HTMLElement | null = null;
 let listEl: HTMLElement | null = null;
 let popupEl: HTMLElement | null = null;
 
-// Cue currently marked is-now, so a time update only touches the DOM when the
-// spoken line actually changes (timeupdate fires ~4×/s).
+// Cue currently marked is-now, so a poll only touches the DOM when the spoken
+// line actually changes.
 let nowCue = -1;
+let followTimer: number | null = null;
 
 // Pending selection captured when the swatch popup is shown.
 interface PendingSel {
@@ -135,10 +136,11 @@ function build() {
 	window.addEventListener('keydown', onKeyDown, true);
 	window.addEventListener('keyup', onKeyUpShield, true);
 	window.addEventListener('keypress', onKeyUpShield, true);
-	// Follow the live player: move the is-now marker (and gently scroll) as it
-	// plays, and on any seek/jump. seeked covers jumps made while paused, which
-	// emit no timeupdate.
-	video?.addEventListener('timeupdate', onPlayback);
+	// Follow the live player: poll currentTime on a short interval (robust — the
+	// `timeupdate` event can be throttled when the scaled player isn't focused, or
+	// while another panel is layered over it) plus `seeked` for an instant response
+	// to jumps. onPlayback only touches the DOM when the spoken cue actually changes.
+	followTimer = window.setInterval(onPlayback, 250);
 	video?.addEventListener('seeked', onPlayback);
 }
 
@@ -484,7 +486,7 @@ function teardown() {
 	window.removeEventListener('keydown', onKeyDown, true);
 	window.removeEventListener('keyup', onKeyUpShield, true);
 	window.removeEventListener('keypress', onKeyUpShield, true);
-	video?.removeEventListener('timeupdate', onPlayback);
+	if (followTimer != null) { clearInterval(followTimer); followTimer = null; }
 	video?.removeEventListener('seeked', onPlayback);
 	nowCue = -1;
 	removePopup();
