@@ -15,7 +15,7 @@ import {
 	testConnection as obsidianTestConnection,
 } from './utils/obsidian-sync';
 import { getConfig as getObsidianConfig, setConfig as setObsidianConfig } from './utils/obsidian-rest';
-import { handleFrameStoreMessage, migrateInlineFrames } from './utils/video/frame-store';
+import { handleFrameStoreMessage, purgeLegacyInlineFrames } from './utils/video/frame-store';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
 const YOUTUBE_INNERTUBE_RULE_ID = 9002;
@@ -410,14 +410,14 @@ if (browser.alarms) {
 }
 
 browser.runtime.onStartup.addListener(() => {
-	migrateInlineFrames().catch(() => {});
+	purgeLegacyInlineFrames().catch(() => {});
 	if (isSyncConfigured()) syncToDrive(false).catch(() => {});
 	obsidianFlush().catch(() => {});
 });
 
-// Move any legacy inline base64 frames into IndexedDB once (also covers a fresh
-// install/update, where onStartup may not fire for an already-running browser).
-migrateInlineFrames().catch(() => {});
+// Discard any legacy inline base64 frames once (only the IndexedDB format is
+// supported now). Also covers an update where onStartup doesn't fire.
+purgeLegacyInlineFrames().catch(() => {});
 
 let lastDrivePollTime = 0;
 const DRIVE_POLL_COOLDOWN_MS = 5000;

@@ -86,8 +86,9 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   editing a comment never re-serialises the images, and the metadata blob stays small. `frame.dataUrl`
   is a **runtime-only** field, rehydrated on demand for display/export and stripped on every write.
   IndexedDB is per-origin, so the **background owns the DB**: content scripts (page origin) route
-  `frameStore{Put,Get,Delete,Has}` messages through it; extension pages (dashboard) use it directly. A
-  one-time `migrateInlineFrames()` moves legacy inline base64 frames into IndexedDB on startup.
+  `frameStore{Put,Get,Delete,Has}` messages through it; extension pages (dashboard) use it directly.
+  Only the IndexedDB format is supported — a one-time `purgeLegacyInlineFrames()` on startup simply
+  discards any old inline base64 frames (no migration).
 
 ### Sync state
 - Local base snapshot: `sync_snapshot` (for 3-way reconcile).

@@ -20,7 +20,7 @@ import browser from '../browser-polyfill';
 const DB_NAME = 'clipper';
 const DB_VERSION = 1;
 const STORE = 'frames';
-const MIGRATED_FLAG = 'video_frames_idb_migrated_v1';
+const PURGED_FLAG = 'video_frames_inline_purged_v1';
 
 const EXT_ORIGIN = (() => {
 	try { return new URL(browser.runtime.getURL('/')).origin; } catch { return ''; }
@@ -151,25 +151,20 @@ export function handleFrameStoreMessage(
 	return false;
 }
 
-// One-time migration: pull any inline base64 frames out of the `video_annotations`
-// JSON into IndexedDB, then rewrite the (now image-free) metadata once. Idempotent
-// and gated by a flag; safe to call on every startup. Extension-context only.
-export async function migrateInlineFrames(): Promise<void> {
+// One-time cleanup: only the IndexedDB format is supported, so any legacy inline
+// base64 frame left in the `video_annotations` JSON is simply discarded (not
+// migrated) to reclaim the space. Idempotent and flag-gated. Extension-only.
+export async function purgeLegacyInlineFrames(): Promise<void> {
 	if (!inExtensionContext()) return;
-	const got = await browser.storage.local.get([MIGRATED_FLAG, 'video_annotations']);
-	if (got[MIGRATED_FLAG]) return;
+	const got = await browser.storage.local.get([PURGED_FLAG, 'video_annotations']);
+	if (got[PURGED_FLAG]) return;
 	const store = (got.video_annotations as Record<string, any>) || {};
 	let changed = false;
 	for (const url of Object.keys(store)) {
 		for (const item of store[url].items || []) {
-			const f = item.frame;
-			if (f && f.dataUrl) {
-				try { await idbPut(item.id, await dataUrlToBlob(f.dataUrl)); } catch { /* keep inline; retry next run */ continue; }
-				delete f.dataUrl;
-				changed = true;
-			}
+			if (item.frame && item.frame.dataUrl) { delete item.frame.dataUrl; changed = true; }
 		}
 	}
 	if (changed) await browser.storage.local.set({ video_annotations: store });
-	await browser.storage.local.set({ [MIGRATED_FLAG]: true });
+	await browser.storage.local.set({ [PURGED_FLAG]: true });
 }
