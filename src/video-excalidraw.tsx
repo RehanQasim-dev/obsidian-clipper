@@ -7,6 +7,12 @@ function App() {
 	const [excalidrawAPI, setExcalidrawAPI] = useState<any>(null);
 	const [frameDataUrl, setFrameDataUrl] = useState<string | null>(null);
 	const [frameSize, setFrameSize] = useState({ w: 0, h: 0 });
+	// Bumped on every INIT_FRAME so the scene-setup effect re-runs even when the
+	// captured frame is byte-identical to the last one (recapturing the SAME paused
+	// timestamp yields the same dataURL — React would otherwise bail on the
+	// unchanged state and never re-post FRAME_RENDERED, leaving the host to reveal
+	// the iframe only via its slow 700ms fallback).
+	const [initSeq, setInitSeq] = useState(0);
 	
 	const [appState, setAppState] = useState<any>({
 		activeTool: { type: 'freedraw' },
@@ -34,6 +40,7 @@ function App() {
 			if (e.data?.type === 'INIT_FRAME') {
 				setFrameDataUrl(e.data.dataUrl);
 				setFrameSize({ w: e.data.w, h: e.data.h });
+				setInitSeq(s => s + 1);
 			} else if (e.data?.type === 'TRIGGER_SAVE') {
 				save('save');
 			} else if (e.data?.type === 'TRIGGER_COMMENT') {
@@ -98,7 +105,7 @@ function App() {
 			console.error('[vid-excali] image setup failed', err);
 			window.parent.postMessage({ type: 'FRAME_RENDERED' }, '*');
 		}
-	}, [excalidrawAPI, frameDataUrl]);
+	}, [excalidrawAPI, frameDataUrl, initSeq]);
 
 	const cycleProp = (key: string, optionsList: any[]) => {
 		if (!excalidrawAPI) return;

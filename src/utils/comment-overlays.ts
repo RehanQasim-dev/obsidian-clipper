@@ -11,16 +11,25 @@ let editingHighlightIds = new Set<string>();
 let focusedHighlightId: string | null = null;
 let expandedCommentIndexes = new Set<string>(); // highlightId-index
 let editingNoteKey: string | null = null; // highlightId-index
-let singleClickTimer: number | null = null; // disambiguates single- vs double-click on a comment
 
 browser.storage.onChanged.addListener((changes, area) => {
 	if (area === 'local' && changes.diagrams) {
 		const newDiagrams = changes.diagrams.newValue || {};
 		let updated = false;
 		for (const [id, data] of Object.entries(newDiagrams)) {
-			if ((data as any).dataUrl && localDiagramCache.get(id) !== (data as any).dataUrl) {
-				localDiagramCache.set(id, (data as any).dataUrl);
+			const dataUrl = (data as any).dataUrl;
+			if (dataUrl && localDiagramCache.get(id) !== dataUrl) {
+				localDiagramCache.set(id, dataUrl);
 				updated = true;
+				// A pending (just-drawn) diagram: now that Excalidraw has actually
+				// saved it, create its comment on the highlight that opened the editor.
+				// Nothing is written on open, so closing the popup without saving
+				// leaves no orphan "Diagram" comment behind.
+				const pendingHid = pendingDiagrams.get(id);
+				if (pendingHid) {
+					pendingDiagrams.delete(id);
+					saveComment(pendingHid, `<!--diagram:${id}-->`);
+				}
 			}
 		}
 		if (updated) {
@@ -42,6 +51,12 @@ browser.storage.onChanged.addListener((changes, area) => {
 const boxRenderCache = new WeakMap<HTMLElement, string>();
 
 const localDiagramCache = new Map<string, string>();
+
+// Diagrams whose Excalidraw editor is open but not yet saved: diagramId →
+// highlightId. The comment is created only once the editor saves (see the
+// storage listener above), so an unsaved/closed editor never leaves a stray
+// comment.
+const pendingDiagrams = new Map<string, string>();
 
 // --- Group handling ----------------------------------------------------------
 // A multi-block selection (e.g. several bullet points) produces one highlight
@@ -171,6 +186,19 @@ export function stopAddingComment(highlightId: string) {
 	renderCommentBoxes();
 }
 
+// Reflect each comment's collapse state as a class on the live element rather
+// than baking it into the box's HTML. Like is-focused, this keeps the rendered
+// markup identical regardless of expand state, so toggling never rebuilds the
+// box (the cache short-circuits) — which is what makes a single click expand
+// instantly and leaves the element intact for a follow-up double-click to edit.
+function applyCollapseState(box: HTMLElement, highlightId: string) {
+	box.querySelectorAll('.obsidian-comment-text[data-index]').forEach(el => {
+		const idx = (el as HTMLElement).dataset.index;
+		const expanded = expandedCommentIndexes.has(`${highlightId}-${idx}`);
+		el.classList.toggle('is-collapsed', !expanded);
+	});
+}
+
 export function renderCommentBoxes() {
 	// Reset padding first to get true un-padded coordinates
 	document.body.style.paddingLeft = '';
@@ -211,9 +239,10 @@ export function renderCommentBoxes() {
 			updateCommentBox(box, highlight);
 		}
 		newActiveBoxes.set(highlight.id, box);
+		applyCollapseState(box, highlight.id);
 
 		// Temporarily set position to get accurate offsetHeight
-		box.style.top = '0px'; 
+		box.style.top = '0px';
 		const boxHeight = box.offsetHeight;
 
 		const rect = getHighlightBlockRect(highlight);
@@ -401,9 +430,10 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 				saveComment(highlight.id, text);
 			}
 		} else if (target.closest('.obsidian-comment-diagram-new')) {
-			// Save a new empty diagram comment, then open the editor
+			// Open the editor for a brand-new diagram WITHOUT writing a comment yet.
+			// The comment is created when (and only when) the editor saves an image.
 			const diagramId = 'd' + Math.random().toString(36).substring(2, 9);
-			saveComment(highlight.id, `<!--diagram:${diagramId}-->`);
+			pendingDiagrams.set(diagramId, highlight.id);
 			browser.runtime.sendMessage({ action: 'openPopupWithDiagram', id: diagramId });
 		} else if (target.closest('.obsidian-comment-diagram-img')) {
 			const img = target.closest('.obsidian-comment-diagram-img') as HTMLImageElement;
@@ -415,21 +445,22 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 			const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 			const noteIndex = textEl.dataset.index;
 			const expandKey = `${highlight.id}-${noteIndex}`;
-			if (singleClickTimer) clearTimeout(singleClickTimer);
-			// Short delay disambiguates a single click (expand) from a double click
-			// (edit). Re-query the live element when the timer fires so the overflow
-			// check reads the current DOM rather than a possibly-stale reference.
-			singleClickTimer = window.setTimeout(() => {
-				singleClickTimer = null;
-				if (expandedCommentIndexes.has(expandKey)) {
-					expandedCommentIndexes.delete(expandKey);
-				} else {
-					const liveEl = box.querySelector(`.obsidian-comment-text[data-index="${noteIndex}"]`) as HTMLElement | null;
-					const overflows = !!liveEl && (liveEl.classList.contains('has-overflow') || liveEl.scrollHeight > liveEl.clientHeight);
-					if (overflows) expandedCommentIndexes.add(expandKey);
+			// Expand/collapse instantly. Collapse state is a class applied OUTSIDE the
+			// cached HTML (like is-focused), so toggling it doesn't rebuild the box —
+			// the element survives, which both keeps it seamless and lets a following
+			// double-click still resolve to edit. renderCommentBoxes only reflows the
+			// neighbours (cache hit, no innerHTML churn).
+			if (expandedCommentIndexes.has(expandKey)) {
+				expandedCommentIndexes.delete(expandKey);
+				textEl.classList.add('is-collapsed');
+			} else {
+				const overflows = textEl.classList.contains('has-overflow') || textEl.scrollHeight > textEl.clientHeight;
+				if (overflows) {
+					expandedCommentIndexes.add(expandKey);
+					textEl.classList.remove('is-collapsed');
 				}
-				renderCommentBoxes();
-			}, 250);
+			}
+			renderCommentBoxes();
 		}
 	});
 
@@ -440,10 +471,6 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		const target = e.target as HTMLElement;
 		const textEl = target.closest('.obsidian-comment-text') as HTMLElement;
 		if (textEl) {
-			if (singleClickTimer) {
-				clearTimeout(singleClickTimer);
-				singleClickTimer = null;
-			}
 			const noteIndex = textEl.dataset.index;
 			if (noteIndex !== undefined) {
 				editingNoteKey = `${highlight.id}-${noteIndex}`;
@@ -548,7 +575,7 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 			<textarea class="new-comment-textarea" placeholder="${notes.length > 0 ? 'Reply…' : 'Add a comment…'}" rows="1"></textarea>
 			<div class="obsidian-comment-editor-actions">
 				<button class="obsidian-comment-diagram-new" aria-label="Add Diagram" title="Add Diagram">
-					<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+					<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>
 				</button>
 				<button class="obsidian-comment-save-new" aria-label="Submit">
 					<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg>
@@ -560,7 +587,6 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 	if (notes.length > 0) {
 		html += `<div class="obsidian-comment-list">`;
 		notes.forEach((note, index) => {
-			const isExpanded = expandedCommentIndexes.has(`${highlight.id}-${index}`);
 			const isEditingThisNote = editingNoteKey === `${highlight.id}-${index}`;
 			const parsed = parseNoteString(note);
 
@@ -618,7 +644,7 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 								</button>
 							</div>
 						</div>
-						<div class="obsidian-comment-text ${isExpanded ? '' : 'is-collapsed'}" data-index="${index}">${displayHtml}</div>
+						<div class="obsidian-comment-text" data-index="${index}">${displayHtml}</div>
 					</div>
 				`;
 			}

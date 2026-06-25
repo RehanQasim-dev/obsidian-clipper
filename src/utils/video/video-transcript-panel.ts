@@ -39,6 +39,10 @@ let root: HTMLElement | null = null;
 let listEl: HTMLElement | null = null;
 let popupEl: HTMLElement | null = null;
 
+// Cue currently marked is-now, so a time update only touches the DOM when the
+// spoken line actually changes (timeupdate fires ~4×/s).
+let nowCue = -1;
+
 // Pending selection captured when the swatch popup is shown.
 interface PendingSel {
 	startCue: number; startOffset: number;
@@ -126,10 +130,45 @@ function build() {
 
 	renderTranscript();
 	scrollToLookback();
+	nowCue = currentCueIndex();
 
 	window.addEventListener('keydown', onKeyDown, true);
 	window.addEventListener('keyup', onKeyUpShield, true);
 	window.addEventListener('keypress', onKeyUpShield, true);
+	// Follow the live player: move the is-now marker (and gently scroll) as it
+	// plays, and on any seek/jump. seeked covers jumps made while paused, which
+	// emit no timeupdate.
+	video?.addEventListener('timeupdate', onPlayback);
+	video?.addEventListener('seeked', onPlayback);
+}
+
+// Keep the transcript in sync with playback: re-mark the current cue and, unless
+// the user is mid-selection (or the swatch popup is up), scroll to follow.
+function onPlayback() {
+	if (!active || !video || !listEl) return;
+	videoTime = video.currentTime;
+	const idx = currentCueIndex();
+	if (idx === nowCue) return;
+	nowCue = idx;
+
+	listEl.querySelector('.ob-vt-cue.is-now')?.classList.remove('is-now');
+	if (idx < 0) return;
+	const span = listEl.querySelector(`.ob-vt-cue[data-cue="${idx}"]`) as HTMLElement | null;
+	if (!span) return;
+	span.classList.add('is-now');
+
+	// Don't yank the view while the user is highlighting text, the popup is open,
+	// or the comment panel is covering the (hidden) transcript.
+	if (popupEl || isCommentsActive()) return;
+	const sel = window.getSelection();
+	if (sel && !sel.isCollapsed) return;
+
+	// Only scroll when the current line drifts out of a comfortable band, then
+	// bring it ~30% from the top — so following reads as gentle, not jumpy.
+	const rel = span.offsetTop - listEl.scrollTop;
+	if (rel < listEl.clientHeight * 0.1 || rel > listEl.clientHeight * 0.8) {
+		listEl.scrollTo({ top: Math.max(0, span.offsetTop - listEl.clientHeight * 0.3), behavior: 'smooth' });
+	}
 }
 
 function buildLangPicker(): HTMLElement {
@@ -191,8 +230,24 @@ function cueInnerHtml(cue: TranscriptCue): string {
 	return html + ' ';
 }
 
+// Repaint only the cue spans covered by a range, in place. Used when adding a
+// highlight so the whole list isn't rebuilt — that both keeps it instant and
+// avoids replaceChildren resetting the scroll position to the top.
+function repaintCueRange(startCue: number, endCue: number) {
+	if (!listEl || !transcript) return;
+	for (let i = startCue; i <= endCue; i++) {
+		const cue = transcript.cues[i];
+		if (!cue) continue;
+		const span = listEl.querySelector(`.ob-vt-cue[data-cue="${i}"]`) as HTMLElement | null;
+		if (span) span.innerHTML = cueInnerHtml(cue);
+	}
+}
+
 function renderTranscript() {
 	if (!listEl || !transcript) return;
+	// Preserve scroll across a full rebuild (lang switch, returning from comments);
+	// replaceChildren would otherwise snap the list back to the top.
+	const prevScroll = listEl.scrollTop;
 	listEl.replaceChildren();
 	const curCueIdx = currentCueIndex();
 	for (const para of transcript.paragraphs) {
@@ -215,6 +270,7 @@ function renderTranscript() {
 		}
 		listEl.appendChild(p);
 	}
+	listEl.scrollTop = prevScroll;
 }
 
 // Seek the live player (which now sits resized on the left) to a moment.
@@ -349,12 +405,15 @@ async function createHighlight(color: VideoColor, thenComment: boolean) {
 		notes: [],
 	};
 	saved.push(item);
-	await upsertVideoItem(watchUrl, videoId, videoTitle, item);
-
 	pendingSel = null;
 	removePopup();
 	window.getSelection()?.removeAllRanges();
-	renderTranscript();
+	// Paint the highlight immediately (only the covered cues) — don't gate it on
+	// the storage write, which can take a beat when the video has large saved
+	// frames, and don't rebuild the whole list, which would jump the scroll.
+	repaintCueRange(startCue, endCue);
+
+	await upsertVideoItem(watchUrl, videoId, videoTitle, item);
 
 	if (thenComment) openCommentFor(item.id);
 }
@@ -425,6 +484,9 @@ function teardown() {
 	window.removeEventListener('keydown', onKeyDown, true);
 	window.removeEventListener('keyup', onKeyUpShield, true);
 	window.removeEventListener('keypress', onKeyUpShield, true);
+	video?.removeEventListener('timeupdate', onPlayback);
+	video?.removeEventListener('seeked', onPlayback);
+	nowCue = -1;
 	removePopup();
 
 	if (root) unmountHost(root);

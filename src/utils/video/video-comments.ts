@@ -58,16 +58,26 @@ export async function openComments(o: OpenCommentsOpts): Promise<void> {
 	active = true;
 	openedFullscreen = !!document.fullscreenElement;
 
-	const data = await loadVideoData(o.watchUrl);
-	items = data ? data.items.slice() : [];
-	if (o.ensureItem && !items.some(i => i.id === o.ensureItem!.id)) {
-		items.push(o.ensureItem);
-	}
-	items.sort((a, b) => a.videoTime - b.videoTime);
-	focusId = o.focusItemId || (items.length ? items[items.length - 1].id : null);
-
 	if (o.video) o.video.pause();
+
+	// Show the panel right away (scale the player, dock the panel, focus the reply
+	// box) so pressing N reacts instantly. Seed the list with what we already know
+	// — a freshly created note/frame, focused — then fill in the rest once storage
+	// resolves. Loading data first would gate the whole visual reaction on disk I/O.
+	items = o.ensureItem ? [o.ensureItem] : [];
+	focusId = o.focusItemId || (items.length ? items[0].id : null);
 	build();
+
+	const data = await loadVideoData(o.watchUrl);
+	if (!active || opts !== o) return; // closed / superseded while loading
+	const loaded = data ? data.items.slice() : [];
+	if (o.ensureItem && !loaded.some(i => i.id === o.ensureItem!.id)) {
+		loaded.push(o.ensureItem);
+	}
+	loaded.sort((a, b) => a.videoTime - b.videoTime);
+	items = loaded;
+	if (!o.focusItemId) focusId = items.length ? items[items.length - 1].id : focusId;
+	renderConversation();
 }
 
 export function addCommentOnlyNote(): void {
@@ -157,6 +167,13 @@ function anchorHeader(item: VideoItem): HTMLElement {
 
 function renderConversation() {
 	if (!listEl) return;
+	// Preserve an in-progress reply across a re-render: openComments rebuilds the
+	// list once storage finishes loading, which would otherwise wipe whatever the
+	// user already started typing into the focused thread's box.
+	const prevText = inputEl?.value || '';
+	const hadFocus = document.activeElement === inputEl;
+	const selStart = inputEl?.selectionStart ?? null;
+	const selEnd = inputEl?.selectionEnd ?? null;
 	listEl.replaceChildren();
 	if (items.length === 0) {
 		const empty = document.createElement('div');
@@ -228,6 +245,12 @@ function renderConversation() {
 		listEl.appendChild(card);
 	}
 
+	// Restore any preserved in-progress reply text before measuring/scrolling.
+	if (inputEl && prevText) {
+		inputEl.value = prevText;
+		autosizeInput();
+	}
+
 	// Bring the focused thread's reply box into view and focus it, so you can type
 	// immediately without scrolling.
 	const focused = listEl.querySelector('.ob-vidc-thread.is-focused') as HTMLElement | null;
@@ -235,6 +258,10 @@ function renderConversation() {
 		if (inputEl) {
 			inputEl.scrollIntoView({ block: 'center' });
 			inputEl.focus({ preventScroll: true });
+			// Put the caret back where it was if the user was mid-reply.
+			if (hadFocus && selStart != null && selEnd != null) {
+				try { inputEl.setSelectionRange(selStart, selEnd); } catch { /* ignore */ }
+			}
 		} else if (focused) {
 			focused.scrollIntoView({ block: 'nearest' });
 		}

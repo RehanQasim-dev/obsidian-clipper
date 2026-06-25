@@ -111,7 +111,7 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - **Smart truncation**: replies longer than 3 lines collapse; 4th line fades/blurs out.
 - **Expandable**: clicking a truncated reply expands just that one (double-click → edit mode).
 - Inline markdown in editor: `Ctrl+B` / `Ctrl+I` wrap selection. Auto-saves on click-outside.
-- **Diagrams**: A "Add Diagram" button in the comment editor opens a dedicated, isolated Excalidraw window. Drawing a diagram and saving it generates an image that renders directly inline within the comment list. Clicking the image reopens the Excalidraw editor to resume editing. Diagram data (scene JSON and image data URL) is stored in `browser.storage.local` under the `diagrams` key.
+- **Diagrams**: An "Add Diagram" button in the comment editor opens a dedicated, isolated Excalidraw window. The comment is created **only when the editor saves** an image (the diagram-id→highlight mapping is held pending until the saved `dataUrl` lands in storage), so closing the editor without saving leaves no orphan comment. The saved image renders directly inline within the comment list; clicking it reopens the editor to resume editing. Diagram data (scene JSON and image data URL) is stored in `browser.storage.local` under the `diagrams` key.
 - **Grouped highlights are one annotation on the live page**: a multi-block selection (e.g. several
   bullet points sharing a `groupId`) shows a **single comment box / thread** anchored to the group's
   first piece — comments save to that representative, and edit/delete map the flattened thread index
