@@ -28,3 +28,8 @@ context/
 # Obsidian plugin data
 data.json
 
+# Logs and specific directories
+client/
+h/
+*.log
+excalidraw.log

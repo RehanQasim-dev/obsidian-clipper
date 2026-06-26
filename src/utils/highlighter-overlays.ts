@@ -765,7 +765,7 @@ export function triggerHighlightRecovery() {
 		highlights.forEach((highlight) => {
 			if (highlight.type === 'text') {
 				const ranges = textHighlightRanges.get(highlight.id);
-				if (!ranges || ranges.length === 0 || !document.body.contains(ranges[0].startContainer)) {
+				if (!ranges || ranges.length === 0 || ranges.some(r => r.collapsed || !document.body.contains(r.startContainer))) {
 					hasMissing = true;
 				}
 			}
@@ -787,7 +787,7 @@ function updateHighlightOverlayPositions() {
 	highlights.forEach((highlight) => {
 		if (highlight.type === 'text') {
 			const ranges = textHighlightRanges.get(highlight.id);
-			if (!ranges || ranges.length === 0 || !document.body.contains(ranges[0].startContainer)) {
+			if (!ranges || ranges.length === 0 || ranges.some(r => r.collapsed || !document.body.contains(r.startContainer))) {
 				needsReapply = true;
 			}
 			return;
@@ -832,8 +832,10 @@ function isOwnHighlighterUi(el: Element): boolean {
 const observer = new MutationObserver((mutations) => {
 	if (isApplyingHighlights) return;
 	const shouldUpdate = mutations.some(m => {
-		if (!(m.target instanceof Element) || isOwnHighlighterUi(m.target)) return false;
+		const targetEl = m.target.nodeType === 1 ? (m.target as Element) : m.target.parentElement;
+		if (targetEl && isOwnHighlighterUi(targetEl)) return false;
 		return m.type === 'childList'
+			|| m.type === 'characterData'
 			|| (m.type === 'attributes' && (m.attributeName === 'style' || m.attributeName === 'class'));
 	});
 	if (shouldUpdate) throttledUpdateHighlights();
@@ -945,7 +947,7 @@ export function syncHoverListener(): void {
 			subtree: true,
 			attributes: true,
 			attributeFilter: ['style', 'class'],
-			characterData: false,
+			characterData: true,
 		});
 		observerAttached = true;
 	} else if (!needed && observerAttached) {

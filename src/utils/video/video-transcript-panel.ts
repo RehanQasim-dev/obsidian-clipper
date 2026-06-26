@@ -2,12 +2,11 @@ import {
 	VideoItem, VideoColor, genVideoId, upsertVideoItem, loadVideoData,
 } from './video-storage';
 import {
-	getVideoElement, getVideoId, getVideoTitle, isYouTubeWatchPage,
+	getVideoElement, getVideoId, getVideoTitle, isYouTubeWatchPage, onYouTubeNavigate,
 } from './youtube-detect';
 import {
 	LoadedTranscript, TranscriptCue, loadTranscript, getSessionLang, setSessionLang,
 } from './video-transcript';
-import { formatVideoTime } from './video-notes';
 import { openComments, isCommentsActive } from './video-comments';
 import { engagePlayerStage, mountHost, unmountHost, disengagePlayerStage } from './video-player-stage';
 
@@ -43,6 +42,7 @@ let popupEl: HTMLElement | null = null;
 // line actually changes.
 let nowCue = -1;
 let followTimer: number | null = null;
+let navUnsub: (() => void) | null = null;
 
 // Pending selection captured when the swatch popup is shown.
 interface PendingSel {
@@ -71,6 +71,11 @@ export async function startTranscriptAnnotate(): Promise<void> {
 	const my = ++session;
 	active = true;
 	watchUrl = location.href;
+	// YouTube swaps videos without a full reload; close the panel when the
+	// user navigates to a different watch URL so it can't keep showing the
+	// previous video's transcript.
+	navUnsub?.();
+	navUnsub = onYouTubeNavigate(() => { if (active) teardown(); });
 	videoTitle = getVideoTitle();
 	videoTime = video.currentTime;
 	wasPlaying = !video.paused;
@@ -255,14 +260,11 @@ function renderTranscript() {
 	for (const para of transcript.paragraphs) {
 		const p = document.createElement('p');
 		p.className = 'ob-vt-para';
-		const startSec = para.cues[0]?.start ?? 0;
-		const ts = document.createElement('button');
-		ts.type = 'button';
-		ts.className = 'ob-vt-ts';
-		ts.textContent = formatVideoTime(startSec);
-		ts.title = 'Jump to this moment';
-		ts.addEventListener('click', () => seekTo(startSec));
-		p.appendChild(ts);
+		// No per-paragraph timestamp button: the panel is meant to read as a
+		// continuous transcript. Timestamps come from the currently-spoken cue
+		// (the .is-now highlight) for playback, and from the cue containing
+		// the selection's start anchor for annotations — both O(1) via the
+		// data-cue attribute on each <span>.
 		for (const cue of para.cues) {
 			const span = document.createElement('span');
 			span.className = 'ob-vt-cue' + (cue.index === curCueIdx ? ' is-now' : '');
@@ -273,12 +275,6 @@ function renderTranscript() {
 		listEl.appendChild(p);
 	}
 	listEl.scrollTop = prevScroll;
-}
-
-// Seek the live player (which now sits resized on the left) to a moment.
-function seekTo(seconds: number) {
-	const v = video || getVideoElement();
-	if (v) { try { v.currentTime = Math.max(0, seconds); } catch { /* ignore */ } }
 }
 
 function currentCueIndex(): number {
@@ -487,6 +483,7 @@ function teardown() {
 	window.removeEventListener('keyup', onKeyUpShield, true);
 	window.removeEventListener('keypress', onKeyUpShield, true);
 	if (followTimer != null) { clearInterval(followTimer); followTimer = null; }
+	navUnsub?.(); navUnsub = null;
 	video?.removeEventListener('seeked', onPlayback);
 	nowCue = -1;
 	removePopup();
