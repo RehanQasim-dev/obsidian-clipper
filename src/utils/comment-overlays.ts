@@ -227,23 +227,24 @@ export function renderCommentBoxes() {
 		const boxHeight = box.offsetHeight;
 
 		const rect = getHighlightBoundingRect(highlight);
-		const top = rect ? rect.top + window.scrollY : 0;
+		if (!rect) {
+			box.style.display = 'none';
+			continue;
+		}
+		box.style.display = '';
+
+		const top = rect.top + window.scrollY;
 		
 		let side = 'right';
-		let availableLeft = 0;
-		let availableRight = 0;
-
-		if (rect) {
-			availableLeft = rect.left;
-			availableRight = window.innerWidth - rect.right;
-			
-			// If left has more space and enough space for a box, use left. Otherwise default right.
-			if (availableLeft > availableRight && availableLeft >= spaceNeeded) {
-				side = 'left';
-			} else if (availableRight < spaceNeeded && availableLeft > availableRight) {
-				// Even if neither has enough, pick the one with more space to minimize shift
-				side = 'left';
-			}
+		const availableLeft = rect.left;
+		const availableRight = window.innerWidth - rect.right;
+		
+		// If left has more space and enough space for a box, use left. Otherwise default right.
+		if (availableLeft > availableRight && availableLeft >= spaceNeeded) {
+			side = 'left';
+		} else if (availableRight < spaceNeeded && availableLeft > availableRight) {
+			// Even if neither has enough, pick the one with more space to minimize shift
+			side = 'left';
 		}
 
 		if (side === 'left') {

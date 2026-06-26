@@ -11,6 +11,7 @@ import {
 	updateHighlights,
 	updateHighlighterMenu,
 	updateHighlightColor,
+	repositionHighlights,
 } from './highlighter';
 import { clearCommentBoxes, startAddingComment, emphasizeCommentBox } from './comment-overlays';
 import { throttle } from './throttle';
@@ -737,17 +738,37 @@ function getEffectiveBackgroundColor(element: HTMLElement): string {
 	return 'rgb(255, 255, 255)';
 }
 
+let reapplyTimeout: ReturnType<typeof setTimeout> | null = null;
+
 // Reposition element overlays after layout changes. Text highlights paint
 // against the live text via CSS.highlights and reposition natively.
 function updateHighlightOverlayPositions() {
+	let needsReapply = false;
 	highlights.forEach((highlight) => {
-		if (highlight.type === 'text') return;
+		if (highlight.type === 'text') {
+			const ranges = textHighlightRanges.get(highlight.id);
+			if (ranges && ranges.length > 0) {
+				// If the text node is no longer in the document (e.g. SPA hydration replaced it),
+				// the highlight is broken and must be rebuilt.
+				if (!document.body.contains(ranges[0].startContainer)) {
+					needsReapply = true;
+				}
+			}
+			return;
+		}
 		const target = getElementByXPath(highlight.xpath);
 		if (!target) return;
 		document.querySelectorAll(`.obsidian-highlight-overlay[data-highlight-id="${highlight.id}"]`)
 			.forEach(el => el.remove());
 		planHighlightOverlayRects(target, highlight);
 	});
+
+	if (needsReapply) {
+		if (reapplyTimeout) clearTimeout(reapplyTimeout);
+		reapplyTimeout = setTimeout(() => {
+			repositionHighlights();
+		}, 500);
+	}
 }
 
 const throttledUpdateHighlights = throttle(() => {

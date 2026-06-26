@@ -430,7 +430,7 @@ body.obsidian-highlight-overlays-hidden {
 	font-weight: 500;
 	line-height: 1;
 	cursor: pointer;
-	z-index: 999999999;
+	z-index: 10;
 	pointer-events: auto;
 	user-select: none;
 
@@ -486,7 +486,7 @@ body.obsidian-highlight-overlays-hidden {
 	border: 1px solid #424242;
 	border-radius: 20px;
 	box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-	z-index: 999999999;
+	z-index: 10;
 	
 	button:not(.obsidian-highlight-color-btn) {
 		display: flex;
@@ -578,9 +578,9 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 	border: 1px solid rgba(var(--ob-comment-color), 0.4);
 	border-radius: 10px;
 	box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-	padding: 8px 10px;
+	padding: 4px 6px;
 	font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
-	z-index: 999999998;
+	z-index: 9;
 	color: var(--ob-text);
 	box-sizing: border-box;
 	transition: box-shadow 0.15s ease, border-color 0.15s ease;
@@ -799,7 +799,9 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 			width: 100%;
 			box-sizing: border-box;
 			border: none;
-			padding: 6px 32px 6px 10px;
+			display: block; // removes descender gap
+			// Extremely minimal padding to maximize text space
+			padding: 4px 4px 0px 4px; // 0 bottom padding for tight fit
 			margin: 0;
 			font-family: inherit;
 			font-size: var(--ob-font);
@@ -808,9 +810,7 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 			background: transparent;
 			color: inherit;
 			outline: none;
-			// Roughly one line of text plus padding — a single slim field that
-			// grows as the user types (autosized in JS).
-			min-height: 32px;
+			min-height: 20px;
 			max-height: none;
 			overflow: hidden;
 
@@ -824,12 +824,12 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 		}
 
 		.obsidian-comment-editor-actions {
-			position: absolute;
-			bottom: 4px;
-			right: 4px;
 			display: flex;
+			justify-content: flex-end;
 			gap: 4px;
 			align-items: center;
+			padding: 0 4px 2px 0;
+			margin-top: -2px; // pull tightly up to the text
 
 			button {
 				display: flex;
@@ -839,8 +839,13 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 				border: none;
 				color: var(--ob-muted);
 				cursor: pointer;
-				padding: 4px;
+				padding: 2px;
 				border-radius: 4px;
+
+				svg {
+					width: 14px;
+					height: 14px;
+				}
 
 				&:hover {
 					color: var(--ob-text);
@@ -851,8 +856,8 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 					color: var(--ob-muted);
 					border-radius: 50%;
 					padding: 2px;
-					width: 18px;
-					height: 18px;
+					width: 14px;
+					height: 14px;
 					transition: all 0.2s ease;
 				}
 
