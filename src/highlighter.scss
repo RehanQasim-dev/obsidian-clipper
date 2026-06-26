@@ -795,13 +795,23 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 		// The edit-a-note field sits inside a comment item with its own spacing.
 		&.is-editing { margin: 0; }
 
+		&.is-single-line textarea {
+			padding-right: 70px;
+			padding-bottom: 4px;
+		}
+
+		&.is-multi-line textarea {
+			padding-right: 4px;
+			padding-bottom: 28px;
+		}
+
 		textarea {
 			width: 100%;
 			box-sizing: border-box;
 			border: none;
 			display: block; // removes descender gap
-			// Extremely minimal padding to maximize text space
-			padding: 4px 4px 0px 4px; // 0 bottom padding for tight fit
+			// Default padding, overridden by is-single-line/is-multi-line
+			padding: 4px;
 			margin: 0;
 			font-family: inherit;
 			font-size: var(--ob-font);
@@ -828,8 +838,11 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 			justify-content: flex-end;
 			gap: 4px;
 			align-items: center;
-			padding: 0 4px 2px 0;
-			margin-top: -2px; // pull tightly up to the text
+			position: absolute;
+			right: 4px;
+			bottom: 4px;
+			padding: 0;
+			margin: 0;
 
 			button {
 				display: flex;

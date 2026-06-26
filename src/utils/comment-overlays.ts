@@ -176,9 +176,11 @@ function applyCollapseState(box: HTMLElement, highlightId: string) {
 }
 
 export function renderCommentBoxes() {
-	// Reset padding first to get true un-padded coordinates
+	// Reset layout first to get true un-shifted coordinates
 	document.body.style.paddingLeft = '';
 	document.body.style.paddingRight = '';
+	document.body.style.marginLeft = '';
+	document.body.style.marginRight = '';
 
 	// One box per annotation unit (a group → its representative; or an ungrouped
 	// highlight). A unit gets a box if any of its pieces carries a comment or its
@@ -258,12 +260,32 @@ export function renderCommentBoxes() {
 		}
 	}
 
-	if (maxLeftDeficit > 0) {
-		document.body.style.paddingLeft = `${maxLeftDeficit}px`;
-	}
-	if (maxRightDeficit > 0) {
-		document.body.style.paddingRight = `${maxRightDeficit}px`;
-	}
+	preserveScrollPosition(() => {
+		const contentArea = guessMainContentArea(document.body);
+		let finalLeftMargin = 0;
+		let finalRightMargin = 0;
+
+		if (maxLeftDeficit > 0) {
+			if (contentArea) {
+				const freeSpace = Math.max(0, contentArea.left);
+				finalLeftMargin = Math.max(0, maxLeftDeficit - freeSpace);
+			} else {
+				finalLeftMargin = maxLeftDeficit;
+			}
+		}
+
+		if (maxRightDeficit > 0) {
+			if (contentArea) {
+				const freeSpace = Math.max(0, window.innerWidth - contentArea.right);
+				finalRightMargin = Math.max(0, maxRightDeficit - freeSpace);
+			} else {
+				finalRightMargin = maxRightDeficit;
+			}
+		}
+
+		if (finalLeftMargin > 0) document.body.style.marginLeft = `${finalLeftMargin}px`;
+		if (finalRightMargin > 0) document.body.style.marginRight = `${finalRightMargin}px`;
+	});
 
 	// Remove old boxes
 	for (const [id, box] of activeCommentBoxes.entries()) {
@@ -314,7 +336,29 @@ export function renderCommentBoxes() {
 // Grow a textarea to fit its content so the whole comment is visible without
 // an inner scrollbar while typing.
 function autosizeTextarea(ta: HTMLTextAreaElement) {
+	const editorDiv = ta.closest('.obsidian-comment-editor');
+	
+	// Start by assuming it's a single line and see if it wraps with the large right-padding
+	if (editorDiv) {
+		editorDiv.classList.add('is-single-line');
+		editorDiv.classList.remove('is-multi-line');
+	}
+	
+	// Reset height to auto to measure natural content height
 	ta.style.height = 'auto';
+
+	// The height of a single line is typically around 26-30px depending on font.
+	// If it wraps, scrollHeight jumps to 45px+.
+	const isMulti = ta.scrollHeight > 35;
+	
+	if (editorDiv && isMulti) {
+		editorDiv.classList.remove('is-single-line');
+		editorDiv.classList.add('is-multi-line');
+		// Re-measure height with the new padding (which gives it more horizontal room,
+		// so it might actually un-wrap, but we prefer it to stay multi-line to avoid jitter)
+		ta.style.height = 'auto';
+	}
+
 	ta.style.height = `${ta.scrollHeight}px`;
 }
 
@@ -841,8 +885,12 @@ function deleteCommentThread(highlightId: string) {
 export function clearCommentBoxes() {
 	activeCommentBoxes.forEach(box => box.remove());
 	activeCommentBoxes.clear();
-	document.body.style.paddingRight = '';
-	document.body.style.paddingLeft = '';
+	preserveScrollPosition(() => {
+		document.body.style.paddingRight = '';
+		document.body.style.paddingLeft = '';
+		document.body.style.marginRight = '';
+		document.body.style.marginLeft = '';
+	});
 	setActiveHighlight(null);
 }
 
@@ -868,4 +916,49 @@ function escapeHtml(unsafe: string) {
          .replace(/>/g, "&gt;")
          .replace(/"/g, "&quot;")
          .replace(/'/g, "&#039;");
+}
+
+function guessMainContentArea(root: Element): { left: number; right: number } | null {
+	const paragraphs = Array.from(root.querySelectorAll('p, .para'))
+		.map(p => ({ rect: p.getBoundingClientRect(), textLength: p.textContent?.length || 0 }))
+		.filter(({ rect }) => rect.width > 0 && rect.height > 0)
+		.sort((a, b) => b.textLength - a.textLength)
+		.slice(0, 15);
+
+	if (paragraphs.length === 0) return null;
+
+	const leftVotes = new Map<number, number>();
+	const rightVotes = new Map<number, number>();
+
+	paragraphs.forEach(({ rect }) => {
+		leftVotes.set(rect.left, (leftVotes.get(rect.left) || 0) + 1);
+		rightVotes.set(rect.right, (rightVotes.get(rect.right) || 0) + 1);
+	});
+
+	const leftMargin = [...leftVotes.entries()].sort((a, b) => b[1] - a[1]);
+	const rightMargin = [...rightVotes.entries()].sort((a, b) => b[1] - a[1]);
+
+	return { left: leftMargin[0][0], right: rightMargin[0][0] };
+}
+
+function preserveScrollPosition(callback: () => void) {
+	const anchor = Array.from(document.querySelectorAll('p, h1, h2, h3, h4, li, blockquote')).find(el => {
+		const rect = el.getBoundingClientRect();
+		return rect.top >= 0 && rect.top < window.innerHeight && rect.width > 0 && rect.height > 0;
+	});
+
+	if (!anchor) {
+		callback();
+		return;
+	}
+
+	const anchorTop = anchor.getBoundingClientRect().top;
+	callback();
+	const newAnchorTop = anchor.getBoundingClientRect().top;
+	
+	const scrollDelta = newAnchorTop - anchorTop;
+	if (scrollDelta !== 0) {
+		document.documentElement.scrollTop += scrollDelta;
+		document.body.scrollTop += scrollDelta;
+	}
 }

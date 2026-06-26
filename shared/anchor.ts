@@ -91,8 +91,34 @@ export const CONTEXT_LEN = 32;
  */
 export function buildTextQuote(fullText: string, start: number, end: number): TextQuoteAnchor {
 	const quote = fullText.slice(start, end);
-	const prefix = fullText.slice(Math.max(0, start - CONTEXT_LEN), start);
-	const suffix = fullText.slice(end, Math.min(fullText.length, end + CONTEXT_LEN));
+	let prefix = fullText.slice(Math.max(0, start - CONTEXT_LEN), start);
+	let suffix = fullText.slice(end, Math.min(fullText.length, end + CONTEXT_LEN));
+
+	if (typeof Intl !== 'undefined' && (Intl as any).Segmenter) {
+		try {
+			// In browser, document might not exist if this runs in worker, so use navigator.language fallback.
+			const lang = typeof document !== 'undefined' && document.documentElement?.lang ? document.documentElement.lang : 'en';
+			const segmenter = new (Intl as any).Segmenter(lang, { granularity: 'sentence' });
+			const segments = segmenter.segment(fullText);
+			
+			const startSegment = segments.containing(start);
+			if (startSegment) {
+				const sentenceStart = startSegment.index;
+				const prefixLen = Math.max(CONTEXT_LEN, Math.min(200, start - sentenceStart));
+				prefix = fullText.slice(Math.max(0, start - prefixLen), start);
+			}
+
+			const endSegment = segments.containing(end);
+			if (endSegment) {
+				const sentenceEnd = endSegment.index + endSegment.segment.length;
+				const suffixLen = Math.max(CONTEXT_LEN, Math.min(200, sentenceEnd - end));
+				suffix = fullText.slice(end, end + suffixLen);
+			}
+		} catch (e) {
+			// Fallback to exactly CONTEXT_LEN if Intl fails
+		}
+	}
+
 	const anchor: TextQuoteAnchor = { quote, prefix, suffix, occurrence: 0 };
 
 	// Count how many equally-good (same context score) matches occur before this
@@ -293,6 +319,10 @@ export function buildTextMap(root: Node): TextMap {
 		const el = node as Element;
 		if (SKIP_TAGS.has(el.tagName)) return;
 		if (el.hasAttribute && el.hasAttribute('data-annot-ui')) return;
+		if (el.tagName.toUpperCase() === 'BR') {
+			text += ' '; // Hypothesis battle-tested trick: synthesize space for <br> so words don't mash
+			return;
+		}
 		for (let child = node.firstChild; child; child = child.nextSibling) walk(child);
 	};
 	walk(root);

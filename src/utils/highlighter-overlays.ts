@@ -125,13 +125,17 @@ export function renderTextHighlight(highlight: {
 	if (!hl) return;
 	try {
 		const range = resolveTextHighlightRange(highlight);
-		if (!range || range.collapsed) return;
+		if (!range || range.collapsed) {
+			triggerHighlightRecovery();
+			return;
+		}
 		hl.add(range);
 		const existing = textHighlightRanges.get(highlight.id);
 		if (existing) existing.push(range);
 		else textHighlightRanges.set(highlight.id, [range]);
 	} catch (e) {
 		console.warn('Failed to build Range for text highlight', highlight.id, e);
+		triggerHighlightRecovery();
 	}
 }
 
@@ -738,7 +742,32 @@ function getEffectiveBackgroundColor(element: HTMLElement): string {
 	return 'rgb(255, 255, 255)';
 }
 
-let reapplyTimeout: ReturnType<typeof setTimeout> | null = null;
+let recoveryPoller: ReturnType<typeof setInterval> | null = null;
+let recoveryAttempts = 0;
+
+export function triggerHighlightRecovery() {
+	if (recoveryPoller) return;
+	recoveryAttempts = 0;
+	recoveryPoller = setInterval(() => {
+		recoveryAttempts++;
+		let hasMissing = false;
+		highlights.forEach((highlight) => {
+			if (highlight.type === 'text') {
+				const ranges = textHighlightRanges.get(highlight.id);
+				if (!ranges || ranges.length === 0 || !document.body.contains(ranges[0].startContainer)) {
+					hasMissing = true;
+				}
+			}
+		});
+
+		if (hasMissing && recoveryAttempts <= 15) {
+			repositionHighlights();
+		} else {
+			if (recoveryPoller) clearInterval(recoveryPoller as any);
+			recoveryPoller = null;
+		}
+	}, 1000);
+}
 
 // Reposition element overlays after layout changes. Text highlights paint
 // against the live text via CSS.highlights and reposition natively.
@@ -747,12 +776,8 @@ function updateHighlightOverlayPositions() {
 	highlights.forEach((highlight) => {
 		if (highlight.type === 'text') {
 			const ranges = textHighlightRanges.get(highlight.id);
-			if (ranges && ranges.length > 0) {
-				// If the text node is no longer in the document (e.g. SPA hydration replaced it),
-				// the highlight is broken and must be rebuilt.
-				if (!document.body.contains(ranges[0].startContainer)) {
-					needsReapply = true;
-				}
+			if (!ranges || ranges.length === 0 || !document.body.contains(ranges[0].startContainer)) {
+				needsReapply = true;
 			}
 			return;
 		}
@@ -764,10 +789,7 @@ function updateHighlightOverlayPositions() {
 	});
 
 	if (needsReapply) {
-		if (reapplyTimeout) clearTimeout(reapplyTimeout);
-		reapplyTimeout = setTimeout(() => {
-			repositionHighlights();
-		}, 500);
+		triggerHighlightRecovery();
 	}
 }
 

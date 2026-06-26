@@ -605,7 +605,27 @@ export function highlightElement(element: Element, notes?: string[]): string | u
 // Handle text selection for highlighting
 export function handleTextSelection(selection: Selection, notes?: string[]) {
 	if (selection.isCollapsed) return;
-	const range = selection.getRangeAt(0);
+	
+	let range = selection.getRangeAt(0);
+	
+	// Work around a Firefox issue where a selection can have multiple ranges,
+	// in contradiction to the Selection API spec. (Learned from Hypothesis client)
+	for (let i = 1; i < selection.rangeCount; i++) {
+		const b = selection.getRangeAt(i);
+		const next = new Range();
+		if (range.compareBoundaryPoints(Range.START_TO_START, b) <= 0) {
+			next.setStart(range.startContainer, range.startOffset);
+		} else {
+			next.setStart(b.startContainer, b.startOffset);
+		}
+		if (range.compareBoundaryPoints(Range.END_TO_END, b) >= 0) {
+			next.setEnd(range.endContainer, range.endOffset);
+		} else {
+			next.setEnd(b.endContainer, b.endOffset);
+		}
+		range = next;
+	}
+
 	const newHighlightDatas = getHighlightRanges(range);
 
 	let returnedId: string | undefined;
