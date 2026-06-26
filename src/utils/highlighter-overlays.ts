@@ -15,7 +15,7 @@ import {
 } from './highlighter';
 import { clearCommentBoxes, startAddingComment, emphasizeCommentBox } from './comment-overlays';
 import { throttle } from './throttle';
-import { getElementByXPath, isDarkColor, setElementHTML } from './dom-utils';
+import { getElementByXPath, isDarkColor, setElementHTML, isEditableContext } from './dom-utils';
 import { getMessage } from './i18n';
 import { debugLog } from './debug';
 import { resolveAnchor, type AnnotationAnchor } from '../../shared/anchor';
@@ -640,7 +640,18 @@ export function handleMouseUp(event: MouseEvent | TouchEvent) {
 		return;
 	}
 
+	// Selections made inside an editable context (input/textarea/contenteditable/
+	// ARIA textbox — e.g. a page search box or a rich-text editor) belong to the
+	// user's typing and must not be turned into a highlight. Check both the
+	// mouseup target and the selection's anchor node.
 	const selection = window.getSelection();
+	const selectionAnchor = selection?.anchorNode;
+	const selectionAnchorEl = selectionAnchor instanceof Element
+		? selectionAnchor
+		: selectionAnchor?.parentElement ?? null;
+	if (isEditableContext(target) || isEditableContext(selectionAnchorEl)) {
+		return;
+	}
 	if (selection && !selection.isCollapsed) {
 		// When the user drags past the left/right edge of the content area,
 		// browsers extend the selection vertically (up for left, down for

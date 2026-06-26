@@ -3,6 +3,7 @@ import { parseHTML } from 'linkedom';
 import {
 	buildTextQuote,
 	findTextQuote,
+	findTextQuoteRange,
 	createAnchor,
 	createImageAnchor,
 	resolveAnchor,
@@ -144,5 +145,33 @@ describe('image anchoring', () => {
 		const anchor = createImageAnchor('https://site.com/pics/photo.jpg');
 		const root = setup('<img src="https://other.com/different.png">');
 		expect(resolveImageElement(anchor, root)).toBeNull();
+	});
+});
+
+describe('fuzzy fallback (findTextQuoteRange)', () => {
+	const original = 'The quick brown fox jumps over the lazy dog near the river bank.';
+
+	test('still exact-matches an unchanged quote', () => {
+		const start = original.indexOf('brown fox jumps');
+		const q = buildTextQuote(original, start, start + 'brown fox jumps'.length);
+		const r = findTextQuoteRange(original, q)!;
+		expect(original.slice(r.start, r.end)).toBe('brown fox jumps');
+	});
+
+	test('recovers a quote after a single-character edit (typo fix)', () => {
+		const start = original.indexOf('brown fox jumps');
+		const q = buildTextQuote(original, start, start + 'brown fox jumps'.length);
+		// Page later "fixes" a character: fox -> box.
+		const edited = original.replace('brown fox jumps', 'brown box jumps');
+		const r = findTextQuoteRange(edited, q)!;
+		expect(r).not.toBeNull();
+		expect(edited.slice(r.start, r.end)).toBe('brown box jumps');
+	});
+
+	test('rejects an unrelated passage below the quality threshold', () => {
+		const start = original.indexOf('lazy dog');
+		const q = buildTextQuote(original, start, start + 'lazy dog'.length);
+		const elsewhere = 'Completely different content with no similar words at all here.';
+		expect(findTextQuoteRange(elsewhere, q)).toBeNull();
 	});
 });

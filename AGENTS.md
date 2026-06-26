@@ -61,8 +61,8 @@ exists** — the sharded keys are the only format. The shapes below are the per-
 - `StoredData` = `{ url, title, highlights: AnyHighlightData[] }`
 - `TextHighlightData` = `{ type:'text', id, xpath, startOffset, endOffset, content, notes[], color, groupId, updatedAt }`
 - `ElementHighlightData` = `{ type:'element', id, xpath, content, notes[], color, groupId, updatedAt }`
-- **Anchoring**: text → XPath + char offsets; element → XPath only. No fuzzy fallback — if the page
-  shifts and XPath breaks, the highlight silently drops. *(known fragility — candidate for improvement)*
+- **Anchoring**: text → XPath + char offsets; element → XPath only. When XPath breaks, the portable
+  text-quote anchor (below) is the safety net.
 - **Comments** stored inline in `notes[]` as strings tagged with creation/edit timestamps, which act
   as stable IDs for sync merge.
 - **Portable anchor** (`anchor?`): in addition to XPath, each highlight now carries a cross-surface
@@ -70,6 +70,11 @@ exists** — the sharded keys are the only format. The shapes below are the per-
   occurrence) plus an optional **structural** anchor tagged with the `surface` ('web' | 'obsidian') it
   was captured on. Stamped at creation (surface 'web') and backfilled for old highlights. Lets a
   highlight be re-found on the rendered Obsidian note, not just the live DOM. See §5.
+- **Text-quote resolution is three-tiered** (`findTextQuoteRange`): exact `indexOf` → whitespace-
+  insensitive → **fuzzy edit-distance** (`shared/fuzzy-match.ts`, dependency-free since `shared/` is
+  bundled by the plugin too). The fuzzy tier is a last resort that tolerates a few changed characters
+  (typo fixes, smart-quote/punctuation swaps) so a single edited character no longer orphans a
+  highlight. Gated by quality thresholds so a bad guess never displaces an honest "unplaced".
 - `groupId` links multi-block highlights (one selection spanning blocks → one highlight per block).
 - `color` ∈ {yellow, red, green}. `updatedAt` drives sync conflict resolution.
 
@@ -136,6 +141,12 @@ exists** — the sharded keys are the only format. The shapes below are the per-
   Picking a color recolors the whole linked group.
 - **`Ctrl`+highlight** → creates the highlight and immediately opens a new comment box for it.
 - Works inside code blocks and stays clear of images during navigation.
+- **Selection hygiene** (ported from the Hypothesis client): before a selection becomes a highlight
+  the range is passed through `trimRange` (`src/utils/trim-range.ts`), which tightens both boundaries
+  to the nearest non-whitespace character so a triple-click's trailing newline doesn't get baked into
+  the anchor's quote/offsets. Selections inside an editable context (input / textarea /
+  contenteditable / ARIA textbox) are ignored via `isEditableContext` (`src/utils/dom-utils.ts`) so
+  text picked in a page search box or rich-text editor never turns into a highlight.
 - Undo/redo: `Ctrl+Z` / `Ctrl+Shift+Z`. `Esc` exits mode.
 
 ### 3.2 Commenting & annotation system

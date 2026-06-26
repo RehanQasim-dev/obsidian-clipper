@@ -1,3 +1,27 @@
+// Return true if `target` sits in an editable context (form field /
+// contenteditable / ARIA textbox) where a text selection belongs to the user's
+// typing and must not be hijacked into a highlight.
+// Ported from the Hypothesis client (client/src/annotator/util/node.ts).
+export function isEditableContext(target: EventTarget | null): boolean {
+	if (!target || !(target instanceof HTMLElement)) {
+		return false;
+	}
+	const el = target;
+	if (['INPUT', 'TEXTAREA'].includes(el.tagName.toUpperCase())) {
+		return true;
+	}
+	if (el.isContentEditable) {
+		return true;
+	}
+	if (
+		['textbox', 'searchbox', 'combobox'].includes(el.getAttribute?.('role') || '') ||
+		el.closest?.('[role="textbox"], [role="searchbox"], [role="combobox"]')
+	) {
+		return true;
+	}
+	return false;
+}
+
 export function createElementWithClass(tagName: string, className: string): HTMLElement {
 	const element = document.createElement(tagName);
 	element.className = className;

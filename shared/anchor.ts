@@ -26,6 +26,8 @@
  *   3. if neither resolves → `null` (caller lists it as "unplaced", never silently drops)
  */
 
+import { approxMatch } from './fuzzy-match';
+
 export type AnchorSurface = 'web' | 'obsidian';
 
 /** Portable, structure-independent anchor based on the quoted text + context. */
@@ -202,7 +204,71 @@ export function findTextQuote(fullText: string, anchor: TextQuoteAnchor): number
 export function findTextQuoteRange(fullText: string, anchor: TextQuoteAnchor): { start: number; end: number } | null {
 	const exact = findTextQuote(fullText, anchor);
 	if (exact != null) return { start: exact, end: exact + anchor.quote.length };
-	return findWhitespaceInsensitive(fullText, anchor);
+	const ws = findWhitespaceInsensitive(fullText, anchor);
+	if (ws) return ws;
+	// Last resort: edit-distance match. Both exact paths require the page text to
+	// be character-identical (modulo whitespace) to capture time; a single edited
+	// character (typo fix, smart-quote swap, inserted footnote marker) orphans the
+	// highlight forever. Fuzzy matching tolerates a small number of edits.
+	return findFuzzy(fullText, anchor);
+}
+
+/**
+ * Minimum fraction of the (normalized) quote that must survive as a correct
+ * match for a fuzzy result to be trusted. 0.74 ≈ allow up to ~25% of characters
+ * to differ — generous enough for typo fixes and punctuation swaps, strict
+ * enough to reject an unrelated passage that merely shares some words.
+ */
+const FUZZY_MIN_QUOTE_SCORE = 0.74;
+/** Minimum combined (quote + context) score for a fuzzy match to be accepted. */
+const FUZZY_MIN_SCORE = 0.7;
+
+/**
+ * Edit-distance fallback. Operates on whitespace-normalized text (so it also
+ * absorbs the cross-surface whitespace differences the exact paths handle) and
+ * maps the winning span back to original offsets. Disambiguates candidates by
+ * the same prefix/suffix context the exact paths use, and rejects anything below
+ * the quality thresholds so a bad guess never displaces an honest "unplaced".
+ */
+function findFuzzy(fullText: string, anchor: TextQuoteAnchor): { start: number; end: number } | null {
+	const quoteNorm = collapseWs(anchor.quote);
+	if (quoteNorm.length < 4) return null; // too short to fuzzy-match safely
+	const { norm, map } = normalizeWithMap(fullText);
+	const prefixNorm = collapseWs(anchor.prefix);
+	const suffixNorm = collapseWs(anchor.suffix);
+
+	// Allow up to ~25% of the quote to differ, capped so very long quotes don't
+	// make the search prohibitively wide.
+	const maxErrors = Math.min(64, Math.floor(quoteNorm.length * 0.25));
+	if (maxErrors < 1) return null;
+	const matches = approxMatch(norm, quoteNorm, maxErrors);
+	if (matches.length === 0) return null;
+
+	let best: { start: number; end: number; score: number } | null = null;
+	for (const m of matches) {
+		const quoteScore = 1 - m.errors / quoteNorm.length;
+		if (quoteScore < FUZZY_MIN_QUOTE_SCORE) continue;
+		// Context similarity: how many characters of the captured prefix/suffix
+		// still abut the match. collapseWs again on the slices — they can carry a
+		// boundary space that prefixNorm/suffixNorm (already trimmed) lack, which
+		// would otherwise misalign the prefix/suffix comparison.
+		const before = collapseWs(norm.slice(Math.max(0, m.start - prefixNorm.length - 1), m.start));
+		const after = collapseWs(norm.slice(m.end, m.end + suffixNorm.length + 1));
+		const prefixScore = prefixNorm ? commonSuffixLen(before, prefixNorm) / prefixNorm.length : 1;
+		const suffixScore = suffixNorm ? commonPrefixLen(after, suffixNorm) / suffixNorm.length : 1;
+		// Weight the quote itself most heavily; context breaks ties between
+		// similar candidates (e.g. a quote that recurs in the document).
+		const score = 0.6 * quoteScore + 0.2 * prefixScore + 0.2 * suffixScore;
+		if (!best || score > best.score) best = { start: m.start, end: m.end, score };
+	}
+	if (!best || best.score < FUZZY_MIN_SCORE) return null;
+
+	// Map the normalized span back to original offsets (start of first matched
+	// char .. one past last matched char), matching findWhitespaceInsensitive.
+	const start = map[best.start];
+	const lastChar = map[best.end - 1];
+	if (start === undefined || lastChar === undefined) return null;
+	return { start, end: lastChar + 1 };
 }
 
 /** Collapse each whitespace run to a single space, recording the original index of every output char. */

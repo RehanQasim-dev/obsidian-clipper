@@ -1,5 +1,6 @@
 import browser from './browser-polyfill';
 import { getElementXPath, getElementByXPath, setElementHTML } from './dom-utils';
+import { trimRange } from './trim-range';
 import { createAnchor, createImageAnchor, resolveImageElement, locateRange, type AnnotationAnchor } from '../../shared/anchor';
 import { capturePageSourceIfNeeded } from './page-source-capture';
 import { getPage, setPage, removePage } from './page-store';
@@ -624,6 +625,16 @@ export function handleTextSelection(selection: Selection, notes?: string[]) {
 			next.setEnd(b.endContainer, b.endOffset);
 		}
 		range = next;
+	}
+
+	// Tighten the range to drop leading/trailing whitespace (e.g. the trailing
+	// newline a triple-click drags in), so the anchor's quote and offsets wrap
+	// only the meaningful text. trimRange requires text-node boundaries and
+	// non-empty content; fall back to the raw range if those don't hold.
+	try {
+		range = trimRange(range);
+	} catch {
+		// Keep the untrimmed range.
 	}
 
 	const newHighlightDatas = getHighlightRanges(range);
