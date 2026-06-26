@@ -629,8 +629,7 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 		display: block;
 	}
 
-	&.is-focused .obsidian-comment-actions-inline,
-	&:hover .obsidian-comment-actions-inline {
+	&.is-focused .obsidian-comment-actions-inline {
 		opacity: 1;
 		pointer-events: auto;
 	}
@@ -664,6 +663,11 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 		// Hairline divider between replies for clear separation in a thread.
 		& + .obsidian-comment-item {
 			border-top: 1px solid var(--ob-divider);
+		}
+
+		&:hover .obsidian-comment-actions-inline {
+			opacity: 1;
+			pointer-events: auto;
 		}
 
 		.obsidian-comment-text {

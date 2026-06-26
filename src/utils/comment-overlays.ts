@@ -111,54 +111,30 @@ function formatTime(ts: number): string {
 	return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function getHighlightTopPosition(highlight: AnyHighlightData): number | null {
+function getHighlightBoundingRect(highlight: AnyHighlightData): DOMRect | null {
 	if (highlight.type === 'text') {
 		const ranges = textHighlightRanges.get(highlight.id);
 		if (ranges && ranges.length > 0) {
 			const rects = ranges[0].getClientRects();
 			if (rects.length > 0) {
-				let top = Infinity;
+				let top = Infinity, bottom = -Infinity, left = Infinity, right = -Infinity;
 				for (let i = 0; i < rects.length; i++) {
-					if (rects[i].top < top) top = rects[i].top;
+					const r = rects[i];
+					if (r.top < top) top = r.top;
+					if (r.bottom > bottom) bottom = r.bottom;
+					if (r.left < left) left = r.left;
+					if (r.right > right) right = r.right;
 				}
-				return top + window.scrollY;
+				return new DOMRect(left, top, right - left, bottom - top);
 			}
 		}
 	} else {
 		const target = getElementByXPath(highlight.xpath);
 		if (target) {
-			return target.getBoundingClientRect().top + window.scrollY;
+			return target.getBoundingClientRect();
 		}
 	}
 	return null;
-}
-
-function getHighlightBlockRect(highlight: AnyHighlightData): DOMRect | null {
-	let target: Element | null = null;
-	if (highlight.type === 'text') {
-		const ranges = textHighlightRanges.get(highlight.id);
-		if (ranges && ranges.length > 0) {
-			target = ranges[0].commonAncestorContainer as Element;
-			if (target.nodeType === Node.TEXT_NODE) {
-				target = target.parentElement;
-			}
-		}
-	} else {
-		target = getElementByXPath(highlight.xpath);
-	}
-
-	if (!target) return null;
-
-	while (target && target !== document.body && target !== document.documentElement) {
-		const style = window.getComputedStyle(target);
-		const display = style.display;
-		if (display === 'block' || display === 'flex' || display === 'grid' || display === 'table' || display === 'list-item') {
-			return target.getBoundingClientRect();
-		}
-		target = target.parentElement;
-	}
-	
-	return target ? target.getBoundingClientRect() : null;
 }
 
 export function startAddingComment(highlightId: string) {
@@ -250,8 +226,8 @@ export function renderCommentBoxes() {
 		box.style.top = '0px';
 		const boxHeight = box.offsetHeight;
 
-		const rect = getHighlightBlockRect(highlight);
-		const top = rect ? rect.top + window.scrollY : (getHighlightTopPosition(highlight) ?? 0);
+		const rect = getHighlightBoundingRect(highlight);
+		const top = rect ? rect.top + window.scrollY : 0;
 		
 		let side = 'right';
 		let availableLeft = 0;
@@ -650,6 +626,7 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 								${index === 0 ? `<button class="obsidian-comment-thread-delete" aria-label="Delete comment thread" title="Delete comment thread">
 									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
 								</button>` : ''}
+							</div>
 						</div>
 						<div class="obsidian-comment-text" data-index="${index}">${displayHtml}</div>
 					</div>
