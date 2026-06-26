@@ -18,14 +18,21 @@
  */
 
 import { requestUrl } from 'obsidian';
-import { type SyncFile, emptySyncFile } from '../../shared/merge';
+import { type PageRecord } from '../../shared/merge';
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const DRIVE_FILES = 'https://www.googleapis.com/drive/v3/files';
 const DRIVE_UPLOAD = 'https://www.googleapis.com/upload/drive/v3/files';
 const SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
-const SYNC_FILENAME = 'clipper-sync.json';
+const FOLDER_MIME = 'application/vnd.google-apps.folder';
+const PAGES_FOLDER = 'pages';
+
+export interface DriveFileMeta {
+	id: string;
+	name: string;
+	headRevisionId?: string;
+}
 
 export interface DriveTokens {
 	accessToken: string;
@@ -179,56 +186,92 @@ export class DriveClient {
 		return res;
 	}
 
-	private async findFile(): Promise<{ id: string; headRevisionId?: string } | null> {
+	// --- per-page layout (matches the extension's pages/ folder) -------------
+
+	private pagesFolderId: string | null = null;
+
+	private async ensurePagesFolder(): Promise<string> {
+		if (this.pagesFolderId) return this.pagesFolderId;
 		const params = new URLSearchParams({
 			spaces: 'appDataFolder',
-			q: `name='${SYNC_FILENAME}' and trashed=false`,
+			q: `name='${PAGES_FOLDER}' and mimeType='${FOLDER_MIME}' and trashed=false`,
+			fields: 'files(id,name)',
+			pageSize: '1',
+		});
+		const res = await this.authed(`${DRIVE_FILES}?${params.toString()}`, { method: 'GET' });
+		let id = (res.json as { files?: { id: string }[] }).files?.[0]?.id;
+		if (!id) {
+			const meta = { name: PAGES_FOLDER, mimeType: FOLDER_MIME, parents: ['appDataFolder'] };
+			const cres = await this.authed(`${DRIVE_FILES}?fields=id`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(meta),
+			});
+			id = (cres.json as { id: string }).id;
+		}
+		this.pagesFolderId = id;
+		return id;
+	}
+
+	/** List every page record file (the listing doubles as the change manifest). */
+	async listPages(): Promise<DriveFileMeta[]> {
+		const parent = await this.ensurePagesFolder();
+		const out: DriveFileMeta[] = [];
+		let pageToken: string | undefined;
+		do {
+			const params = new URLSearchParams({
+				spaces: 'appDataFolder',
+				q: `'${parent}' in parents and trashed=false`,
+				fields: 'nextPageToken,files(id,name,headRevisionId)',
+				pageSize: '1000',
+			});
+			if (pageToken) params.set('pageToken', pageToken);
+			const res = await this.authed(`${DRIVE_FILES}?${params.toString()}`, { method: 'GET' });
+			const data = res.json as { nextPageToken?: string; files?: DriveFileMeta[] };
+			out.push(...(data.files || []));
+			pageToken = data.nextPageToken;
+		} while (pageToken);
+		return out;
+	}
+
+	private async findPage(name: string): Promise<DriveFileMeta | null> {
+		const parent = await this.ensurePagesFolder();
+		const params = new URLSearchParams({
+			spaces: 'appDataFolder',
+			q: `'${parent}' in parents and name='${name}' and trashed=false`,
 			fields: 'files(id,name,headRevisionId)',
 			pageSize: '1',
 		});
 		const res = await this.authed(`${DRIVE_FILES}?${params.toString()}`, { method: 'GET' });
-		const files = (res.json as { files?: { id: string; headRevisionId?: string }[] }).files;
-		return files?.[0] ?? null;
+		return (res.json as { files?: DriveFileMeta[] }).files?.[0] ?? null;
+	}
+
+	/** Parse a page record by file id (used to discover a remote-only page's url). */
+	async getPageById(fileId: string): Promise<PageRecord | null> {
+		const res = await this.authed(`${DRIVE_FILES}/${fileId}?alt=media`, { method: 'GET' });
+		try { return JSON.parse(res.text) as PageRecord; } catch { return null; }
 	}
 
 	/**
-	 * Download the remote sync file (or an empty one if it doesn't exist yet),
-	 * along with the revision id observed at pull time — the caller passes that
-	 * back to {@link push} so a concurrent write by another client is detected.
+	 * Fetch a page's record + the revision observed at pull time (passed back to
+	 * {@link pushPage} so a concurrent write is detected). Null if it doesn't exist.
 	 */
-	async pull(): Promise<{ file: SyncFile; fileId: string | null; revision?: string }> {
-		const meta = await this.findFile();
-		if (!meta) return { file: emptySyncFile(), fileId: null };
-		const res = await this.authed(`${DRIVE_FILES}/${meta.id}?alt=media`, { method: 'GET' });
-		try {
-			const parsed = JSON.parse(res.text) as Partial<SyncFile>;
-			return {
-				file: {
-					version: 1,
-					highlights: parsed.highlights || {},
-					drawings: parsed.drawings || {},
-					videoAnnotations: parsed.videoAnnotations || {},
-					tombstones: { highlights: {}, drawings: {}, comments: {}, videoItems: {}, ...(parsed.tombstones || {}) },
-				},
-				fileId: meta.id,
-				revision: meta.headRevisionId,
-			};
-		} catch {
-			return { file: emptySyncFile(), fileId: meta.id, revision: meta.headRevisionId };
-		}
+	async pullPage(name: string): Promise<{ record: PageRecord | null; fileId: string | null; revision?: string }> {
+		const meta = await this.findPage(name);
+		if (!meta) return { record: null, fileId: null };
+		return { record: await this.getPageById(meta.id), fileId: meta.id, revision: meta.headRevisionId };
 	}
 
 	/**
-	 * Write the merged sync file back, creating it if needed. When `expectedRevision`
-	 * is given, the current remote revision is re-checked first and {@link ConflictError}
-	 * is thrown if it moved since pull — the caller re-pulls, re-merges, and retries
-	 * (compare-and-swap), so a concurrent write is never silently clobbered.
+	 * Write a merged page record back, creating it if needed. With `expectedRevision`
+	 * the remote revision is re-checked first and {@link ConflictError} thrown if it
+	 * moved since pull, so the caller re-pulls/re-merges (compare-and-swap).
 	 */
-	async push(file: SyncFile, fileId: string | null, expectedRevision?: string): Promise<void> {
-		const content = JSON.stringify(file);
+	async pushPage(name: string, record: PageRecord, fileId: string | null, expectedRevision?: string): Promise<void> {
+		const content = JSON.stringify(record);
 		if (fileId) {
 			if (expectedRevision !== undefined) {
-				const fresh = await this.findFile();
+				const fresh = await this.findPage(name);
 				if (fresh && fresh.headRevisionId !== expectedRevision) throw new ConflictError();
 			}
 			await this.authed(`${DRIVE_UPLOAD}/${fileId}?uploadType=media&fields=id`, {
@@ -238,8 +281,9 @@ export class DriveClient {
 			});
 			return;
 		}
+		const parent = await this.ensurePagesFolder();
 		const boundary = '-------obsidianclipperplugin';
-		const metadata = { name: SYNC_FILENAME, parents: ['appDataFolder'] };
+		const metadata = { name, parents: [parent] };
 		const body =
 			`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
 			`--${boundary}\r\nContent-Type: application/json\r\n\r\n${content}\r\n` +

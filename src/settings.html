@@ -23,6 +23,7 @@
 						<li data-section="interpreter"><div class="nav-item-icon"><i data-lucide="quote"></i></div><span data-i18n="interpreter">Interpreter</span></li>
 						<li data-section="properties"><div class="nav-item-icon"><i data-lucide="archive"></i></div><span data-i18n="properties">Properties</span></li>
 						<li data-section="sync"><div class="nav-item-icon"><i data-lucide="refresh-cw"></i></div><span data-i18n="sync">Sync</span></li>
+						<li data-section="data"><div class="nav-item-icon"><i data-lucide="trash-2"></i></div><span data-i18n="data">Data</span></li>
 						<li class="sidebar-heading" data-i18n="templatesHeading">Templates</li>
 					</ul>
 					<button type="button" id="new-template-btn" class="mod-cta" data-i18n="newTemplate">New&nbsp;template</button>
@@ -808,6 +809,43 @@
 									<div class="setting-item-control">
 										<button type="button" id="obsidian-sync-test-btn">Test connection</button>
 										<button type="button" id="obsidian-sync-all-btn" class="mod-cta">Sync all now</button>
+									</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<div id="data-section" class="settings-section">
+						<div class="settings-section-header">
+							<h2 data-i18n="dataSettings">Data</h2>
+						</div>
+						<div class="setting-group">
+							<div class="setting-items">
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label data-i18n="deleteDriveData">Delete all data on Google Drive</label>
+										<div class="setting-item-description">
+											Permanently deletes every annotation file the extension stores in your Google Drive (the hidden app-data folder: all pages, frame images, and diagrams). Your local annotations are not touched. <b>This cannot be undone.</b>
+										</div>
+									</div>
+									<div class="setting-item-control">
+										<button type="button" id="wipe-drive-btn" class="mod-warning">Delete Drive data</button>
+									</div>
+								</div>
+								<div class="setting-item mod-horizontal">
+									<div class="setting-item-info">
+										<label data-i18n="deleteLocalData">Delete all local data</label>
+										<div class="setting-item-description">
+											Permanently deletes all annotations stored in this browser — highlights, comments, drawings, video notes, and diagram/frame images. Settings, templates, and your sync connection are kept. Data already on Google Drive is not touched (a later sync may restore it). <b>This cannot be undone.</b>
+										</div>
+									</div>
+									<div class="setting-item-control">
+										<button type="button" id="wipe-local-btn" class="mod-warning">Delete local data</button>
+									</div>
+								</div>
+								<div class="setting-item">
+									<div class="setting-item-info">
+										<div id="wipe-status" class="setting-item-description"></div>
 									</div>
 								</div>
 							</div>

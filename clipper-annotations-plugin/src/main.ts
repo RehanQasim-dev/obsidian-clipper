@@ -13,14 +13,14 @@
 
 import { debounce, MarkdownView, Modal, Notice, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
 import { createAnchor, createImageAnchor, type RangeLike } from '../../shared/anchor';
-import { emptySyncFile, type HighlightsStorage, type SyncFile } from '../../shared/merge';
-import { AnnotationStore, normalizeUrl, type Annotation, type HighlightColor } from './store';
+import { pageFileName, type PageRecord, type Highlight } from '../../shared/merge';
+import { AnnotationStore, normalizeUrl, type Annotation, type HighlightColor, type SourceAnnotations } from './store';
 import { repaintHighlights, setActiveHighlight, scrollToHighlight, clearHighlights, type PaintResult } from './render';
 import { SwatchPopup } from './swatch';
 import { COMMENTS_VIEW_TYPE, CommentsView, type CommentsContext, type CommentsController } from './comments-view';
 import { ClipperSettingTab, DEFAULT_SETTINGS, type ClipperAnnotationSettings } from './settings';
 import { DriveClient, ConflictError, type AuthCodeRequest, type DriveAuthStore, type DriveTokens } from './drive';
-import { reconcile } from './sync';
+import { reconcilePage } from './sync';
 
 interface CurrentSource {
 	file: TFile;
@@ -48,10 +48,11 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 	private store!: AnnotationStore;
 	private swatch!: SwatchPopup;
 
-	// Drive sync state (persisted alongside the store in one data.json).
+	// Drive sync state (persisted alongside the store in one data.json). Per-page:
+	// one snapshot/foreign bucket per normalized URL, mirroring the per-page Drive layout.
 	private driveTokens: DriveTokens | null = null;
-	private syncSnapshot: SyncFile = emptySyncFile();
-	private foreign: HighlightsStorage = {};
+	private syncSnapshots: Record<string, PageRecord> = {};
+	private foreign: Record<string, Highlight[]> = {};
 
 	private current: CurrentSource | null = null;
 	private lastPaint: PaintResult | null = null;
@@ -71,9 +72,9 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 		const blob = ((await this.loadData()) as Record<string, unknown>) ?? {};
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, blob.settings as Partial<ClipperAnnotationSettings>);
 		const drive = blob.drive as { tokens?: DriveTokens } | undefined;
-		const sync = blob.sync as { snapshot?: SyncFile; foreign?: HighlightsStorage } | undefined;
+		const sync = blob.sync as { snapshots?: Record<string, PageRecord>; foreign?: Record<string, Highlight[]> } | undefined;
 		this.driveTokens = drive?.tokens ?? null;
-		this.syncSnapshot = sync?.snapshot ?? emptySyncFile();
+		this.syncSnapshots = sync?.snapshots ?? {};
 		this.foreign = sync?.foreign ?? {};
 
 		this.store = new AnnotationStore(blob, () => this.persistAll());
@@ -156,7 +157,7 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 			...this.store.raw(),
 			settings: this.settings,
 			drive: { tokens: this.driveTokens },
-			sync: { snapshot: this.syncSnapshot, foreign: this.foreign },
+			sync: { snapshots: this.syncSnapshots, foreign: this.foreign },
 		});
 	}
 
@@ -221,30 +222,56 @@ export default class ClipperAnnotationsPlugin extends Plugin {
 		if (this.syncing) return; // coalesce overlapping interval/focus/manual triggers
 		this.syncing = true;
 		try {
-			// Compare-and-swap: pull → merge → push only if the remote hasn't moved
-			// since the pull; otherwise re-pull and re-merge. Bounded retry.
-			for (let attempt = 0; attempt < 4; attempt++) {
-				const { file: remote, fileId, revision } = await drive.pull();
-				const out = reconcile({
-					snapshot: this.syncSnapshot,
-					remote,
-					sources: this.store.allSources(),
-					foreign: this.foreign,
-					now: Date.now(),
-				});
-				try {
-					await drive.push(out.merged, fileId, revision);
-				} catch (err) {
-					if (err instanceof ConflictError && attempt < 3) continue; // remote changed — redo
-					throw err;
+			const byUrl = new Map<string, SourceAnnotations>();
+			for (const s of this.store.allSources()) byUrl.set(normalizeUrl(s.url), s);
+
+			// Candidate pages: local annotations + preserved foreign + prior snapshots…
+			const urls = new Set<string>([...byUrl.keys(), ...Object.keys(this.foreign), ...Object.keys(this.syncSnapshots)]);
+			// …plus remote-only pages (filename is a hash, so download to learn the url).
+			const remoteFiles = await drive.listPages();
+			const localNames = new Set<string>();
+			for (const u of urls) localNames.add(await pageFileName(u));
+			for (const f of remoteFiles) {
+				if (!localNames.has(f.name)) {
+					const rec = await drive.getPageById(f.id);
+					if (rec?.url) urls.add(normalizeUrl(rec.url));
 				}
-				this.syncSnapshot = out.merged;
-				this.foreign = out.foreign;
-				await this.store.replaceAll(out.sources); // persists everything via persistAll
-				this.repaint();
-				if (interactive) new Notice('Synced with Google Drive.');
-				return;
 			}
+
+			// Reconcile each page independently (per-page compare-and-swap).
+			const nextSources: SourceAnnotations[] = [];
+			for (const url of urls) {
+				const name = await pageFileName(url);
+				for (let attempt = 0; attempt < 4; attempt++) {
+					const { record: remote, fileId, revision } = await drive.pullPage(name);
+					const src = byUrl.get(url);
+					const out = reconcilePage({
+						url,
+						title: src?.title,
+						snapshot: this.syncSnapshots[url] ?? null,
+						remote,
+						annotations: src?.annotations ?? [],
+						foreign: this.foreign[url] ?? [],
+						now: Date.now(),
+					});
+					try {
+						if (JSON.stringify(out.merged) !== JSON.stringify(remote)) {
+							await drive.pushPage(name, out.merged, fileId, revision);
+						}
+					} catch (err) {
+						if (err instanceof ConflictError && attempt < 3) continue; // remote moved — redo this page
+						throw err;
+					}
+					this.syncSnapshots[url] = out.merged;
+					if (out.foreign.length) this.foreign[url] = out.foreign; else delete this.foreign[url];
+					if (out.annotations.length) nextSources.push({ url, ...(out.title ? { title: out.title } : {}), annotations: out.annotations });
+					break;
+				}
+			}
+
+			await this.store.replaceAll(nextSources); // persists store + sync state via persistAll
+			this.repaint();
+			if (interactive) new Notice('Synced with Google Drive.');
 		} catch (err) {
 			if (interactive) new Notice(`Sync failed: ${err instanceof Error ? err.message : String(err)}`);
 		} finally {

@@ -10,6 +10,7 @@ import { getLocalStorage, setLocalStorage, loadSettings, generalSettings, Settin
 import { escapeHtml, unescapeValue } from '../utils/string-utils';
 import { loadTemplates, createDefaultTemplate } from '../managers/template-manager';
 import browser from '../utils/browser-polyfill';
+import { anyPageChanged } from '../utils/page-store';
 import { addBrowserClassToHtml, detectBrowser } from '../utils/browser-detection';
 import { createElementWithClass } from '../utils/dom-utils';
 import { initializeInterpreter, handleInterpreterUI, collectPromptVariables } from '../utils/interpreter';
@@ -236,7 +237,7 @@ const debouncedHighlightRefresh = debounce(() => {
 
 function setupStorageListeners() {
 	browser.storage.local.onChanged.addListener((changes) => {
-		if (changes.highlights) {
+		if (anyPageChanged(changes, ['hl'])) {
 			debouncedHighlightRefresh();
 		}
 	});

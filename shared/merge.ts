@@ -313,6 +313,147 @@ export function mergeVideoStorage(
 	return out;
 }
 
+// --- Per-page record merge (the per-page Drive layout) -----------------------
+//
+// The per-page Drive layout stores ONE file per normalized URL holding that
+// page's highlights + drawings + video items + diagrams, with its own tombstones.
+// `mergePageRecord` is the 3-way reconcile for a single such record — same
+// primitives as the whole-dataset mergers above, just scoped to one page. Image
+// bytes never live here: video frames carry only `frame.driveId`, and a diagram
+// carries only its `sceneData` + id (the rendered PNG is a separate Drive blob).
+
+export interface PageDiagram {
+	id: string;
+	updatedAt?: number;
+	driveId?: string;       // Drive blob id for the rendered PNG
+	sceneDriveId?: string;  // Drive file id for the editable scene JSON
+	[k: string]: unknown;   // image/scene BYTES never live here — only pointers
+}
+
+export interface PageTombstones {
+	highlights: Record<string, number>;
+	drawings: Record<string, number>;
+	comments: Record<string, number>; // `${ownerId}:${commentTs}` -> deletedAt
+	videoItems: Record<string, number>;
+	diagrams: Record<string, number>;
+}
+
+export interface PageRecord {
+	version: 2;
+	url: string;
+	title?: string;
+	videoId?: string;
+	highlights: Highlight[];
+	drawings: Stroke[];
+	videoItems: VideoItem[];
+	diagrams: PageDiagram[];
+	tombstones: PageTombstones;
+	// Set by the sync layer when the page has no live entities, so a peer can drop
+	// it; merge correctness rests on the per-entity tombstones, not this flag.
+	deletedAt?: number | null;
+}
+
+export function emptyPageTombstones(): PageTombstones {
+	return { highlights: {}, drawings: {}, comments: {}, videoItems: {}, diagrams: {} };
+}
+
+export function emptyPageRecord(url: string): PageRecord {
+	return { version: 2, url, highlights: [], drawings: [], videoItems: [], diagrams: [], tombstones: emptyPageTombstones() };
+}
+
+/**
+ * Drive filename for a page's record. A normalized URL isn't a safe filename, so
+ * we hash it (SHA-256 prefix) — the real url lives inside the record. Defined in
+ * `shared/` so the extension and the Obsidian plugin compute the SAME name and
+ * therefore read/write the same per-page file. (`crypto.subtle` exists in both the
+ * extension service worker and the Obsidian/Electron runtime.)
+ */
+export async function pageFileName(url: string): Promise<string> {
+	const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
+	const hex = Array.from(new Uint8Array(buf).slice(0, 16))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+	return `page-${hex}.json`;
+}
+
+function diagramVersion(d: PageDiagram): number {
+	return d.updatedAt || 0;
+}
+
+/**
+ * 3-way reconcile of a single page record. `base` is the last-reconciled state
+ * (snapshot), `local` this device's current state, `remote` the Drive file (the
+ * canonical tombstone carrier). Any may be null/absent. Returns the merged record
+ * with updated tombstones, ready to write locally and upload.
+ */
+export function mergePageRecord(
+	base: PageRecord | null,
+	local: PageRecord | null,
+	remote: PageRecord | null,
+	now: number,
+): PageRecord {
+	const url = local?.url || remote?.url || base?.url || '';
+	const b = base || emptyPageRecord(url);
+	const l = local || emptyPageRecord(url);
+	const r = remote || emptyPageRecord(url);
+
+	// Seed from remote — the shared, durable record of deletions (as in mergeSyncFiles).
+	const tombs: PageTombstones = {
+		highlights: { ...r.tombstones.highlights },
+		drawings: { ...r.tombstones.drawings },
+		comments: { ...r.tombstones.comments },
+		videoItems: { ...r.tombstones.videoItems },
+		diagrams: { ...r.tombstones.diagrams },
+	};
+
+	const bH = byId(b.highlights), lH = byId(l.highlights), rH = byId(r.highlights);
+	const hRes = mergeKeyed(bH, lH, rH, tombs.highlights, highlightVersion, (x, y) => {
+		const newer = highlightVersion(x) >= highlightVersion(y) ? x : y;
+		const notes = mergeNotes(bH.get(x.id)?.notes, x.notes, y.notes, tombs.comments, x.id, now);
+		return { ...newer, notes };
+	}, now);
+	tombs.highlights = hRes.tombs;
+
+	const dRes = mergeKeyed(
+		byId(b.drawings), byId(l.drawings), byId(r.drawings), tombs.drawings,
+		(s: Stroke) => s.updatedAt || 0,
+		(x, y) => ((x.updatedAt || 0) >= (y.updatedAt || 0) ? x : y),
+		now,
+	);
+	tombs.drawings = dRes.tombs;
+
+	const bV = byId(b.videoItems), lV = byId(l.videoItems), rV = byId(r.videoItems);
+	const vRes = mergeKeyed(bV, lV, rV, tombs.videoItems, videoItemVersion, (x, y) => {
+		const newer = videoItemVersion(x) >= videoItemVersion(y) ? x : y;
+		const notes = mergeNotes(bV.get(x.id)?.notes, x.notes, y.notes, tombs.comments, x.id, now);
+		const frame = newer.frame || x.frame || y.frame;
+		return { ...newer, notes, ...(frame ? { frame } : {}) };
+	}, now);
+	tombs.videoItems = vRes.tombs;
+
+	const gRes = mergeKeyed(
+		byId(b.diagrams), byId(l.diagrams), byId(r.diagrams), tombs.diagrams,
+		diagramVersion,
+		(x, y) => (diagramVersion(x) >= diagramVersion(y) ? x : y),
+		now,
+	);
+	tombs.diagrams = gRes.tombs;
+
+	const title = l.title ?? r.title ?? b.title;
+	const videoId = l.videoId ?? r.videoId ?? b.videoId;
+	return {
+		version: 2,
+		url,
+		...(title ? { title } : {}),
+		...(videoId ? { videoId } : {}),
+		highlights: [...hRes.kept.values()],
+		drawings: [...dRes.kept.values()],
+		videoItems: [...vRes.kept.values()],
+		diagrams: [...gRes.kept.values()],
+		tombstones: tombs,
+	};
+}
+
 /**
  * Full 3-way reconcile of a {@link SyncFile}. Mutates a fresh tombstone set
  * (seeded from `remote`) and returns the merged file ready to upload.

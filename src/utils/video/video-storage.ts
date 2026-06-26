@@ -1,6 +1,6 @@
-import browser from '../browser-polyfill';
 import { normalizeUrl } from '../highlighter';
 import { deleteFrameImage } from './frame-store';
+import { getPage, setPage, removePage, getAll } from '../page-store';
 
 // Persistence for YouTube video annotations. Kept entirely separate from the
 // page-highlight (`highlights`) and pencil (`drawings`) stores so the dashboard
@@ -107,8 +107,6 @@ export interface VideoAnnotationData {
 
 export type VideoStorage = Record<string, VideoAnnotationData>;
 
-const STORAGE_KEY = 'video_annotations';
-
 export function emptyMarkup(): VideoMarkup {
 	return { strokes: [], lines: [], texts: [], rects: [], arrows: [] };
 }
@@ -118,13 +116,11 @@ export function genVideoId(): string {
 }
 
 export async function loadAllVideoData(): Promise<VideoStorage> {
-	const result = await browser.storage.local.get(STORAGE_KEY);
-	return (result[STORAGE_KEY] || {}) as VideoStorage;
+	return getAll<VideoAnnotationData>('va');
 }
 
 export async function loadVideoData(url: string): Promise<VideoAnnotationData | null> {
-	const all = await loadAllVideoData();
-	return all[normalizeUrl(url)] || null;
+	return getPage<VideoAnnotationData>('va', normalizeUrl(url));
 }
 
 // Add a new item or replace an existing one (matched by id) for a video.
@@ -143,8 +139,7 @@ export function upsertVideoItem(
 ): Promise<void> {
 	return enqueueWrite(async () => {
 		const key = normalizeUrl(watchUrl);
-		const all = await loadAllVideoData();
-		const entry: VideoAnnotationData = all[key] || { url: key, videoId, items: [] };
+		const entry: VideoAnnotationData = (await getPage<VideoAnnotationData>('va', key)) || { url: key, videoId: videoId as string, items: [] };
 		if (title && !entry.title) entry.title = title;
 		entry.videoId = videoId || entry.videoId;
 		item.updatedAt = Date.now();
@@ -159,36 +154,31 @@ export function upsertVideoItem(
 		else entry.items.push(toStore);
 		// Keep items ordered by video time so the dashboard timeline is correct.
 		entry.items.sort((a, b) => a.videoTime - b.videoTime);
-		all[key] = entry;
-		await browser.storage.local.set({ [STORAGE_KEY]: all });
+		await setPage<VideoAnnotationData>('va', key, entry);
 	});
 }
 
 export function updateVideoItemNotes(watchUrl: string, itemId: string, notes: string[]): Promise<void> {
 	return enqueueWrite(async () => {
 		const key = normalizeUrl(watchUrl);
-		const all = await loadAllVideoData();
-		const entry = all[key];
+		const entry = await getPage<VideoAnnotationData>('va', key);
 		if (!entry) return;
 		const item = entry.items.find(i => i.id === itemId);
 		if (!item) return;
 		item.notes = notes;
 		item.updatedAt = Date.now();
-		all[key] = entry;
-		await browser.storage.local.set({ [STORAGE_KEY]: all });
+		await setPage<VideoAnnotationData>('va', key, entry);
 	});
 }
 
 export function removeVideoItem(watchUrl: string, itemId: string): Promise<void> {
 	return enqueueWrite(async () => {
 		const key = normalizeUrl(watchUrl);
-		const all = await loadAllVideoData();
-		const entry = all[key];
+		const entry = await getPage<VideoAnnotationData>('va', key);
 		if (!entry) return;
 		entry.items = entry.items.filter(i => i.id !== itemId);
-		if (entry.items.length === 0) delete all[key];
-		else all[key] = entry;
-		await browser.storage.local.set({ [STORAGE_KEY]: all });
+		if (entry.items.length === 0) await removePage('va', key);
+		else await setPage<VideoAnnotationData>('va', key, entry);
 		// Drop the frame image too so IndexedDB doesn't accumulate orphans.
 		deleteFrameImage(itemId).catch(() => {});
 	});

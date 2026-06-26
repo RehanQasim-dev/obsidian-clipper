@@ -46,7 +46,18 @@ This branch adds **live-webpage annotation** (highlights, comments, freehand dra
 All annotation data lives in `browser.storage.local`, keyed by **normalized URL** (hash + ephemeral
 tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 
-### Highlights — key `highlights`: `Record<normalizedUrl, StoredData>`
+### Per-page sharding (`utils/page-store.ts`)
+`storage.local` treats each top-level key as one opaque blob, so a `set` re-serialises the **whole**
+value. To avoid O(total-dataset) writes (and cross-tab lost updates) on every comment edit, each page
+is stored under its **own key**: `hl:<normalizedUrl>` (highlights), `dr:<…>` (drawings), `va:<…>`
+(video). A write touches only that page's record. `page-store` is the single access layer:
+`getPage`/`setPage`/`removePage` for one page (the content-script hot path); `getAll`/`getAllUrls`/
+`clearAll`/`setAll` reassemble the whole map via `get(null)` + prefix filter for the dashboard, sync,
+and Obsidian paths; `changedPages`/`anyPageChanged` interpret `storage.onChanged` batches (a change
+arrives as `changes['hl:<url>']`, not `changes.highlights`). **No legacy/monolithic-key migration
+exists** — the sharded keys are the only format. The shapes below are the per-page value types.
+
+### Highlights — key `hl:<normalizedUrl>`: `StoredData`
 - `StoredData` = `{ url, title, highlights: AnyHighlightData[] }`
 - `TextHighlightData` = `{ type:'text', id, xpath, startOffset, endOffset, content, notes[], color, groupId, updatedAt }`
 - `ElementHighlightData` = `{ type:'element', id, xpath, content, notes[], color, groupId, updatedAt }`
@@ -62,12 +73,19 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - `groupId` links multi-block highlights (one selection spanning blocks → one highlight per block).
 - `color` ∈ {yellow, red, green}. `updatedAt` drives sync conflict resolution.
 
-### Drawings — key `drawings`: `Record<normalizedUrl, { url, strokes: PencilStroke[] }>`
+### Drawings — key `dr:<normalizedUrl>`: `{ url, strokes: PencilStroke[] }`
 - `PencilStroke` = `{ id, color, width, points:[x,y,x,y,...], updatedAt? }` (flattened document coords).
 
 ### Domains — key `domains`: `Record<hostname, DomainSettings>` (custom site name, etc.)
 
-### Video annotations — key `video_annotations`: `Record<normalizedUrl, VideoAnnotationData>`
+### Diagrams — key `diagrams`: `Record<diagramId, { sceneData, updatedAt }>`
+- Excalidraw comment diagrams (see §3.2). `sceneData` = `{ elements, appState, files }` (the editable
+  scene, kept in `chrome.storage.local` so the editor can reopen it). The **rendered PNG is NOT here** —
+  it lives in the IndexedDB blob store keyed by `diagramId` (see frame-store below), exactly like video
+  frames, and is rehydrated on demand for display. No synced JSON ever carries diagram image bytes — only
+  the id. (`sceneData.files` may still carry base64 if a raster is pasted into the diagram — minor.)
+
+### Video annotations — key `va:<normalizedUrl>`: `VideoAnnotationData`
 - Kept separate from `highlights`/`drawings` so the dashboard routes them to their own card
   renderer and the (large) captured frames never bloat the highlight/sync payloads.
 - `VideoAnnotationData` = `{ url, videoId, title?, items: VideoItem[] }`.
@@ -81,20 +99,30 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - Frames are downscaled JPEG (~1280px). The frame **metadata + markup + notes + transcript items
   are Drive-synced**; the JPEG itself is stored as a **separate Drive appData blob** (referenced by
   `frame.driveId`) and never inlined into `clipper-sync.json`, so the merge payload stays small.
-- **Frame JPEGs are NOT in the `video_annotations` blob.** They live locally in **IndexedDB**
-  (`utils/video/frame-store.ts`, DB `clipper`, store `frames`, keyed by item id) as real `Blob`s — so
-  editing a comment never re-serialises the images, and the metadata blob stays small. `frame.dataUrl`
+- **Frame JPEGs are NOT in the `va:` record.** They live locally in **IndexedDB**
+  (`utils/video/frame-store.ts`, DB `clipper`, object stores `frames` *and* `diagrams` — the same module
+  also backs Excalidraw comment-diagram PNGs, keyed by diagram id), keyed by item id, as real `Blob`s — so
+  editing a comment never re-serialises the images, and the metadata record stays small. `frame.dataUrl`
   is a **runtime-only** field, rehydrated on demand for display/export and stripped on every write.
   IndexedDB is per-origin, so the **background owns the DB**: content scripts (page origin) route
   `frameStore{Put,Get,Delete,Has}` messages through it; extension pages (dashboard) use it directly.
-  Only the IndexedDB format is supported — a one-time `purgeLegacyInlineFrames()` on startup simply
-  discards any old inline base64 frames (no migration).
+  Only the IndexedDB format is supported (no legacy inline-base64 handling).
 
-### Sync state
-- Local base snapshot: `sync_snapshot` (for 3-way reconcile).
-- Drive file: `clipper-sync.json` in `drive.appdata` (hidden, app-scoped); frame JPEGs live beside it
-  as separate `frame-<itemId>.jpg` appData blobs.
-- `SyncFile` = `{ version:1, highlights, drawings, videoAnnotations, tombstones:{highlights,drawings,comments,videoItems} }`.
+### Sync state (per-page Drive layout)
+- **Drive layout** (all in `drive.appdata`, hidden + app-scoped):
+  - `pages/page-<urlhash>.json` — one record per normalized URL (`urlhash` = SHA-256 prefix; the real
+    url lives inside). A `PageRecord` = `{ version:2, url, title?, videoId?, highlights[], drawings[],
+    videoItems[], diagrams[], tombstones:{highlights,drawings,comments,videoItems,diagrams} }`. **No image
+    or scene bytes** — frames carry only `frame.driveId`; diagrams carry only `{id, updatedAt, driveId,
+    sceneDriveId}` pointers.
+  - `frames/frame-<itemId>.jpg` — video frame image blobs.
+  - `diagrams/diagram-<id>.png` (rendered) + `diagram-<id>.scene.json` (editable Excalidraw scene).
+- **Per-page bookkeeping** in `storage.local`: `snap:<url>` (the last-reconciled `PageRecord`, = the
+  3-way merge base) and `pagemeta:<url>` (`{fileId, headRevisionId}` for CAS + change detection).
+- **`shared/merge.mergePageRecord`** reconciles ONE page (base/local/remote) — the merge is never
+  whole-dataset. `sync-engine` assembles a `PageRecord` from the sharded local stores + the global
+  `diagrams` map, uploads images that lack a blob (or were edited), uploads the image-free page JSON
+  with a CAS on the file's `headRevisionId`, then pulls any missing images and writes the merge back.
 
 ---
 
@@ -118,7 +146,7 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
 - **Smart truncation**: replies longer than 3 lines collapse; 4th line fades/blurs out.
 - **Expandable**: clicking a truncated reply expands just that one (double-click → edit mode).
 - Inline markdown in editor: `Ctrl+B` / `Ctrl+I` wrap selection. Auto-saves on click-outside.
-- **Diagrams**: An "Add Diagram" button in the comment editor opens a dedicated, isolated Excalidraw window. The comment is created **only when the editor saves** an image (the diagram-id→highlight mapping is held pending until the saved `dataUrl` lands in storage), so closing the editor without saving leaves no orphan comment. The saved image renders directly inline within the comment list; clicking it reopens the editor to resume editing. Diagram data (scene JSON and image data URL) is stored in `browser.storage.local` under the `diagrams` key.
+- **Diagrams**: An "Add Diagram" button in the comment editor opens a dedicated, isolated Excalidraw window. The comment is created **only when the editor saves** (the diagram-id→highlight mapping is held pending until the save lands), so closing the editor without saving leaves no orphan comment. The editable **scene JSON** is stored in `browser.storage.local` under the `diagrams` key (`{ sceneData, updatedAt }`); the **rendered PNG is stored as a binary blob in IndexedDB** (frame-store `diagrams` store, keyed by diagram id) and rehydrated on demand — never inline in any JSON. Editing reuses the same diagram id (overwrites in place, no orphan); deleting the comment drops both the `diagrams` entry and the IndexedDB blob.
 - **Grouped highlights are one annotation on the live page**: a multi-block selection (e.g. several
   bullet points sharing a `groupId`) shows a **single comment box / thread** anchored to the group's
   first piece — comments save to that representative, and edit/delete map the flattened thread index
@@ -141,14 +169,20 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   page title opens the real website in a new tab. Navigation levels: all → domain → page, with breadcrumbs.
 - Export (JSON/Markdown) and delete, scoped to all / domain / page.
 
-### 3.5 Google Drive sync
+### 3.5 Google Drive sync (per-page)
 - Google OAuth via `browser.identity`; connect/disconnect from settings.
-- Syncs `highlights` + `drawings` + `video_annotations` (transcript items, notes, frame markup) as a
-  single `clipper-sync.json` in an app-scoped Drive folder; frame images sync as separate appData blobs.
-- **3-way merge** (base snapshot vs local vs remote): newest edit wins per item; comments from both
-  devices are kept; deletions tracked as **tombstones** so they don't resurrect.
-- **Push**: automatic shortly after a change. **Pull**: periodic + on startup. **"Sync now"** button
-  forces an immediate reconcile and shows last-synced time / errors. See `GOOGLE_DRIVE_SYNC.md`.
+- Syncs highlights + drawings + video (transcript items, notes, frame markup) **and Excalidraw comment
+  diagrams** — **one Drive file per page** (`pages/page-<urlhash>.json`), with frame/diagram images and
+  diagram scenes as separate blobs (see §2 "Sync state").
+- **Per-page 3-way merge** (`shared/merge.mergePageRecord`): newest edit wins per item; comments from both
+  devices are kept; deletions tracked as **per-page tombstones** so they don't resurrect. The merge is
+  **never** over the whole dataset — always a single page at a time.
+- **Push is targeted**: a change enqueues only the affected page URL(s) and reconciles just those files
+  (a diagram edit is mapped to its page via `findPagesForDiagrams`). **Pull/full reconcile**: periodic +
+  on startup + **"Sync now"** walks every local page and every remote `pages/` file (the file listing is
+  the change-manifest), reconciling each independently. See `GOOGLE_DRIVE_SYNC.md`.
+- The Obsidian companion plugin (§5) is the second client of this per-page Drive layout and uses the
+  **same** `pages/page-<urlhash>.json` files (`shared/merge.pageFileName` gives both the identical name).
 
 ### 3.6 YouTube video frame notes (lectures)
 - On a YouTube watch page, **`S`** captures the current frame and the video pauses. The draw step is a
@@ -223,7 +257,18 @@ tracking params like `utm_*`, `fbclid`, `_ga` stripped).
   **"Sync all now"** button. **Offline-safe:** if Obsidian/the plugin is unreachable the queue is kept and
   retried on the sync alarm (5 min) and on startup, so pending changes flush automatically once it's back.
 
-### 3.9 Keyboard shortcut reference
+### 3.9 Data settings (destructive wipes)
+- **Settings → Data** (separate from Sync, sidebar item `data`; `managers/data-settings.ts`). Two
+  type-to-confirm actions, each routed to a background handler:
+  - **Delete all data on Google Drive** → `wipeDriveData` → `google-drive.wipeAppData()` deletes every
+    file in the appData folder (pages/frames/diagrams + any legacy `clipper-sync.json`) and resets local
+    sync bookkeeping. Local annotations are untouched.
+  - **Delete all local data** → `wipeLocalData` → removes all `hl:`/`dr:`/`va:`/`snap:`/`pagemeta:` keys
+    plus `diagrams`/`page_sources` from `storage.local` and clears both IndexedDB image stores
+    (`frame-store.clearAllImages`). Settings, templates, and the Drive connection are kept; Drive data is
+    untouched (a later sync may restore it).
+
+### 3.10 Keyboard shortcut reference
 | Key | Action |
 |-----|--------|
 | `H` | Toggle highlighter |
@@ -286,20 +331,24 @@ imports the other's `src/`).
   Markdown is single-spaced while a live web page's text nodes carry raw newlines, indentation, and
   non-breaking spaces; an exact match would never bridge that gap, so highlights made in Obsidian
   wouldn't paint on the live page. Operates on a `RangeLike`; pure + unit-tested (`shared/anchor.test.ts`).
-- **`shared/merge.ts`** — the pure 3-way `clipper-sync.json` merge (newest-wins, tombstones, comment
-  merge), unit-tested (`shared/merge.test.ts`). **Both** the extension's `sync-engine.ts` and the
-  plugin's `sync.ts` import these merge functions, so there is a single implementation of the
-  conflict-resolution logic (`sync-engine.ts` keeps only its orchestrator, storage types, and
-  frame-stripping; the structurally-identical storage types stay declared locally).
+- **`shared/merge.ts`** — the pure 3-way merge (newest-wins, tombstones, comment merge), unit-tested
+  (`shared/merge.test.ts`). Exposes `mergePageRecord` (per-page; used by both clients now) and
+  `pageFileName` (so both compute the same `pages/page-<urlhash>.json`). **Both** the extension's
+  `sync-engine.ts` and the plugin's `sync.ts` import these, so conflict resolution + file naming have a
+  single implementation. (The legacy whole-dataset `mergeSyncFiles`/`mergeHighlightsStorage` remain — the
+  plugin still uses `mergeHighlightsStorage` to merge a single page's highlight list.)
 - **Full page source → Obsidian:** the extension captures the readable page as Markdown
   (`page-source-capture.ts`, Defuddle) on first save and temporarily stores it under `page_sources`.
   The Obsidian sync writes it below the managed region on note creation (immutable; re-syncs never
   touch it), so the plugin has content to render and re-anchor against. Once successfully synced to Obsidian,
   the stored page source is automatically deleted from local storage to conserve space.
-- **Bidirectional Drive sync:** the plugin is a second client of the same Drive `clipper-sync.json`
-  via Google's **device-authorization OAuth** flow (`drive.ts`, no redirect/server, works on mobile);
-  `sync.ts` maps annotations ↔ the highlight shape, merges via `shared/merge`, and passes the
-  extension's drawings/video (and unrenderable highlights) through untouched so nothing is lost.
+- **Bidirectional Drive sync (per-page):** the plugin is a second client of the same per-page Drive
+  layout (`pages/page-<urlhash>.json`) via Google's auth-code OAuth flow (`drive.ts`, per-page
+  `listPages`/`pullPage`/`pushPage` with revision CAS). `sync.ts` `reconcilePage` maps annotations ↔ the
+  highlight shape and merges **only** each page's highlight list, passing the extension's
+  drawings/video/diagrams (pointers only — no image bytes) and their tombstones through from the remote
+  record untouched; unrenderable highlights are kept per-page in a `foreign` bucket so nothing is lost.
+  Per-page snapshots + foreign buckets persist in the plugin's `data.json`.
 
 - **Reading-view painting (plugin):** Obsidian renders reading view progressively and **virtualizes**
   off-screen sections, so a single post-open repaint paints nothing (text not yet in the DOM) or only

@@ -1,6 +1,7 @@
 import browser from './browser-polyfill';
 import { normalizeUrl } from './highlighter';
 import { pushUndo } from './undo-manager';
+import { getPage, setPage, removePage } from './page-store';
 
 // Freehand pencil tool. Unlike highlights (which anchor to DOM nodes via XPath
 // and reflow with the page), pencil strokes are raw pixel paths stored in
@@ -297,9 +298,7 @@ function updateMarqueeDiv(): void {
 
 export async function loadDrawings(): Promise<void> {
 	const url = normalizeUrl(getPageUrl());
-	const result = await browser.storage.local.get('drawings');
-	const all = (result.drawings || {}) as DrawingsStorage;
-	const data = all[url];
+	const data = await getPage<StoredDrawings>('dr', url);
 	strokes = data && Array.isArray(data.strokes) ? data.strokes : [];
 	if (strokes.length > 0) renderStrokes();
 	syncListeners();
@@ -316,32 +315,31 @@ let drawingsStorageQueue = Promise.resolve();
 function saveDrawings(): void {
 	drawingsStorageQueue = drawingsStorageQueue.then(() => {
 		const url = normalizeUrl(getPageUrl());
-		return browser.storage.local.get('drawings').then((result: { drawings?: DrawingsStorage }) => {
-			const all = result.drawings || {};
+		return getPage<StoredDrawings>('dr', url).then((prev) => {
 			if (strokes.length > 0) {
 				// Stamp updatedAt on new/changed strokes so the sync engine can resolve
 				// cross-device conflicts by most-recent edit.
-				const prevById = new Map((all[url]?.strokes || []).map(s => [s.id, s]));
+				const prevById = new Map((prev?.strokes || []).map(s => [s.id, s]));
 				const now = Date.now();
 				strokes = strokes.map(s => {
-					const prev = prevById.get(s.id);
-					return (!prev || !strokeContentEqual(prev, s)) ? { ...s, updatedAt: now } : s;
+					const prevS = prevById.get(s.id);
+					return (!prevS || !strokeContentEqual(prevS, s)) ? { ...s, updatedAt: now } : s;
 				});
-				all[url] = { url, strokes };
+				return setPage<StoredDrawings>('dr', url, { url, strokes });
 			} else {
-				delete all[url];
+				return removePage('dr', url);
 			}
-			return browser.storage.local.set({ drawings: all });
 		});
 	}).catch(console.error);
 }
 
 // Cross-tab sync: pick up drawing changes made in another tab for this URL.
 browser.storage.onChanged.addListener((changes, area) => {
-	if (area !== 'local' || !changes.drawings) return;
+	if (area !== 'local') return;
 	const url = normalizeUrl(getPageUrl());
-	const all = (changes.drawings.newValue || {}) as DrawingsStorage;
-	const next = all[url]?.strokes ?? [];
+	const change = changes['dr:' + url];
+	if (!change) return;
+	const next = (change.newValue as StoredDrawings | undefined)?.strokes ?? [];
 	if (JSON.stringify(next) === JSON.stringify(strokes)) return;
 	strokes = next;
 	selectedIds = new Set([...selectedIds].filter(id => strokes.some(s => s.id === id)));

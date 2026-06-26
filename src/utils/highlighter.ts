@@ -2,6 +2,7 @@ import browser from './browser-polyfill';
 import { getElementXPath, getElementByXPath, setElementHTML } from './dom-utils';
 import { createAnchor, createImageAnchor, resolveImageElement, locateRange, type AnnotationAnchor } from '../../shared/anchor';
 import { capturePageSourceIfNeeded } from './page-source-capture';
+import { getPage, setPage, removePage } from './page-store';
 import {
 	handleMouseUp,
 	planHighlightOverlayRects,
@@ -1064,16 +1065,14 @@ export function saveHighlights() {
 		if (highlights.length > 0) {
 			const title = pageTitle || document.title || undefined;
 			void capturePageSourceIfNeeded(url, title);
-			return browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
-				const allHighlights: HighlightsStorage = result.highlights || {};
-				const prevById = new Map((allHighlights[url]?.highlights || []).map(h => [h.id, h]));
+			return getPage<StoredData>('hl', url).then((prev) => {
+				const prevById = new Map((prev?.highlights || []).map(h => [h.id, h]));
 				const now = Date.now();
 				const stamped = highlights.map(h => {
-					const prev = prevById.get(h.id);
-					return (!prev || !highlightContentEqual(prev, h)) ? { ...h, updatedAt: now } : h;
+					const prevH = prevById.get(h.id);
+					return (!prevH || !highlightContentEqual(prevH, h)) ? { ...h, updatedAt: now } : h;
 				});
-				allHighlights[url] = { highlights: stamped, url, title };
-				return browser.storage.local.set({ highlights: allHighlights });
+				return setPage<StoredData>('hl', url, { highlights: stamped, url, title });
 			}).then(() => {
 				const ogSiteName = document.querySelector('meta[property="og:site_name"]')?.getAttribute('content');
 				if (ogSiteName) {
@@ -1089,11 +1088,8 @@ export function saveHighlights() {
 				}
 			});
 		} else {
-			return browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
-				const allHighlights: HighlightsStorage = result.highlights || {};
-				delete allHighlights[url];
-				if (rawUrl !== url) delete allHighlights[rawUrl];
-				return browser.storage.local.set({ highlights: allHighlights });
+			return removePage('hl', url).then(() => {
+				if (rawUrl !== url) return removePage('hl', rawUrl);
 			});
 		}
 	}).catch(console.error);
@@ -1238,12 +1234,13 @@ export function collapseGroupsForExport(
 // listener will handle it. Without this, both bundles render and you get
 // duplicate overlays / delete buttons.
 browser.storage.onChanged.addListener((changes, area) => {
-	if (area !== 'local' || !changes.highlights) return;
+	if (area !== 'local') return;
+	const url = normalizeUrl(getPageUrl());
+	const change = changes['hl:' + url];
+	if (!change) return;
 	const bridge = window.__obsidianHighlighter;
 	if (bridge && bridge.applyHighlights !== applyHighlights) return;
-	const url = normalizeUrl(getPageUrl());
-	const newAll = (changes.highlights.newValue || {}) as HighlightsStorage;
-	const newForUrl = newAll[url]?.highlights ?? [];
+	const newForUrl = (change.newValue as StoredData | undefined)?.highlights ?? [];
 	if (JSON.stringify(newForUrl) === JSON.stringify(highlights)) return;
 	highlights = newForUrl;
 	bumpHighlightsVersion();
@@ -1255,18 +1252,18 @@ browser.storage.onChanged.addListener((changes, area) => {
 export async function loadHighlights() {
 	const url = normalizeUrl(getPageUrl());
 	const rawUrl = getPageUrl();
-	const result = await browser.storage.local.get('highlights');
-	const allHighlights = (result.highlights || {}) as HighlightsStorage;
 
 	// Check normalized key first, then fall back to raw URL for old entries
-	let storedData = allHighlights[url];
-	if (!storedData && rawUrl !== url && allHighlights[rawUrl]) {
-		// Migrate old entry to normalized key
-		storedData = allHighlights[rawUrl];
-		storedData.url = url;
-		allHighlights[url] = storedData;
-		delete allHighlights[rawUrl];
-		browser.storage.local.set({ highlights: allHighlights });
+	let storedData = await getPage<StoredData>('hl', url);
+	if (!storedData && rawUrl !== url) {
+		const rawData = await getPage<StoredData>('hl', rawUrl);
+		if (rawData) {
+			// Migrate old entry to normalized key
+			storedData = rawData;
+			storedData.url = url;
+			await setPage<StoredData>('hl', url, storedData);
+			await removePage('hl', rawUrl);
+		}
 	}
 
 	if (storedData && Array.isArray(storedData.highlights) && storedData.highlights.length > 0) {
@@ -1350,19 +1347,15 @@ function backfillWebAnchor(h: AnyHighlightData): AnnotationAnchor | undefined {
 export function clearHighlights() {
 	const url = normalizeUrl(getPageUrl());
 	const oldHighlights = [...highlights];
-	browser.storage.local.get('highlights').then((result: { highlights?: HighlightsStorage }) => {
-		const allHighlights: HighlightsStorage = result.highlights || {};
-		delete allHighlights[url];
-		browser.storage.local.set({ highlights: allHighlights }).then(() => {
-			highlights = [];
-			bumpHighlightsVersion();
-			removeExistingHighlights();
-			syncHoverListener();
-			console.log('Highlights cleared for:', url);
-			browser.runtime.sendMessage({ action: "highlightsCleared" });
-			updateHighlighterMenu();
-			addToHistory('remove', oldHighlights, []);
-		});
+	removePage('hl', url).then(() => {
+		highlights = [];
+		bumpHighlightsVersion();
+		removeExistingHighlights();
+		syncHoverListener();
+		console.log('Highlights cleared for:', url);
+		browser.runtime.sendMessage({ action: "highlightsCleared" });
+		updateHighlighterMenu();
+		addToHistory('remove', oldHighlights, []);
 	});
 }
 

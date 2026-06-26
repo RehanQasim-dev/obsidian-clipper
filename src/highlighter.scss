@@ -641,20 +641,6 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 		flex-direction: column;
 		gap: 0;
 		margin-bottom: 8px;
-		padding-left: 16px;
-
-		// Vertical thread rail (in the highlight's color) tying the replies
-		// together as one conversation. The per-comment dots sit on it.
-		&::before {
-			content: '';
-			position: absolute;
-			left: 3px;
-			top: 8px;
-			bottom: 8px;
-			width: 2px;
-			border-radius: 2px;
-			background: rgba(var(--ob-comment-color), 0.5);
-		}
 	}
 
 	.obsidian-inline-tag {
@@ -731,20 +717,8 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 			min-height: 16px;
 		}
 
-		// Dot sits on the thread rail (rail center ≈ 4px from the list's left edge;
-		// the header content starts ~18px in, so the dot is pulled left to meet the
-		// rail and vertically centered on the header line).
 		.obsidian-comment-dot {
-			position: absolute;
-			left: -18px;
-			top: 50%;
-			transform: translateY(-50%);
-			width: 9px;
-			height: 9px;
-			border-radius: 50%;
-			background: rgb(var(--ob-comment-color));
-			// Ring in the box surface color so the dot reads as sitting on the rail.
-			box-shadow: 0 0 0 2px rgba(var(--ob-box-bg), 1);
+			display: none;
 		}
 
 		.obsidian-comment-timestamp {
@@ -782,8 +756,19 @@ body[data-ob-comment-size="large"] .obsidian-comment-box { --ob-font: 17px; }
 			.obsidian-comment-edit:hover {
 				color: #A68AF9;
 			}
-			.obsidian-comment-delete:hover {
+			.obsidian-comment-delete:hover,
+			.obsidian-comment-thread-delete:hover {
 				color: #ff4444;
+			}
+
+			// Thread delete (trash icon, first reply only) sits at the far right of
+			// the row, after the per-reply actions, with a hairline divider so it
+			// reads as the thread-level action rather than another reply action.
+			.obsidian-comment-thread-delete {
+				margin-left: 2px;
+				padding-left: 4px;
+				border-left: 1px solid var(--ob-divider);
+				border-radius: 0 4px 4px 0;
 			}
 		}
 	}

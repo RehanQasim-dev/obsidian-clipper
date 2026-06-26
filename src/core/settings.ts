@@ -16,6 +16,7 @@ import { showSettingsSection, initializeSidebar } from '../managers/settings-sec
 import { initializeReaderSettings } from '../managers/reader-settings';
 import { initializeSyncSettings } from '../managers/sync-settings';
 import { initializeObsidianSyncSettings } from '../managers/obsidian-sync-settings';
+import { initializeDataSettings } from '../managers/data-settings';
 import { initializeAutoSave } from '../utils/auto-save';
 import { handleTemplateDrag, initializeDragAndDrop } from '../utils/drag-and-drop';
 import { exportTemplate, showTemplateImportModal, copyTemplateToClipboard } from '../utils/import-export';
@@ -65,6 +66,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 				await initializeObsidianSyncSettings();
 			} catch (error) {
 				console.error('Error initializing Obsidian sync settings, continuing:', error);
+			}
+
+			try {
+				initializeDataSettings();
+			} catch (error) {
+				console.error('Error initializing data settings, continuing:', error);
 			}
 			
 			// Initialize interpreter settings with error handling

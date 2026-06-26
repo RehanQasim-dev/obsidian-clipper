@@ -15,15 +15,13 @@
 
 import {
 	mergeHighlightsStorage,
-	type SyncFile,
-	type HighlightsStorage,
-	type StoredHighlights,
+	emptyPageRecord,
+	type PageRecord,
 	type Highlight,
 	type Tombstones,
 } from '../../shared/merge';
 import type { AnnotationAnchor } from '../../shared/anchor';
-import type { Annotation, CommentMsg, HighlightColor, SourceAnnotations } from './store';
-import { normalizeUrl } from './store';
+import type { Annotation, CommentMsg, HighlightColor } from './store';
 
 // --- comment <-> note string encoding (matches the extension's note format) ---
 
@@ -137,81 +135,82 @@ function highlightToAnnotation(h: Highlight, baseUrl?: string): Annotation | nul
 	};
 }
 
-/** Build the local highlights storage: foreign (verbatim) overlaid with our annotations. */
-function toLocalHighlights(sources: SourceAnnotations[], foreign: HighlightsStorage): HighlightsStorage {
-	const out: HighlightsStorage = JSON.parse(JSON.stringify(foreign));
-	for (const s of sources) {
-		const url = normalizeUrl(s.url);
-		const bucket: StoredHighlights = out[url] ?? { url, title: s.title, highlights: [] };
-		// Drop any prior copies of these ids (the annotation is authoritative for them).
-		const ours = new Set(s.annotations.map((a) => a.id));
-		bucket.highlights = bucket.highlights.filter((h) => !ours.has(h.id));
-		for (const a of s.annotations) bucket.highlights.push(annotationToHighlight(a));
-		if (s.title) bucket.title = s.title;
-		out[url] = bucket;
-	}
-	return out;
-}
+// --- per-page reconcile ------------------------------------------------------
+//
+// The plugin understands only *highlights*. For each page it merges the highlight
+// list (so comments round-trip with the extension + live pages) and passes the
+// extension's drawings / video items / diagrams — and their tombstones — through
+// from the remote record VERBATIM. Highlights it can't render (no usable anchor)
+// are kept in a per-page `foreign` bucket so they're never seen as deleted here.
+// Image bytes are never touched: video frames and diagrams are pointers only.
 
-/** Split merged highlights into renderable annotations + the preserved foreign bucket. */
-function fromMergedHighlights(hs: HighlightsStorage): { sources: SourceAnnotations[]; foreign: HighlightsStorage } {
-	const sources: SourceAnnotations[] = [];
-	const foreign: HighlightsStorage = {};
-	for (const url of Object.keys(hs)) {
-		const entry = hs[url];
-		if (!entry) continue;
-		const annotations: Annotation[] = [];
-		const foreignHl: Highlight[] = [];
-		for (const h of entry.highlights) {
-			const ann = highlightToAnnotation(h, url);
-			if (ann) annotations.push(ann);
-			else foreignHl.push(h);
-		}
-		if (annotations.length) sources.push({ url, title: entry.title, annotations });
-		if (foreignHl.length) foreign[url] = { url, title: entry.title, highlights: foreignHl };
-	}
-	return { sources, foreign };
-}
-
-export interface ReconcileInput {
-	snapshot: SyncFile; // base (last reconciled)
-	remote: SyncFile; // current Drive state
-	sources: SourceAnnotations[]; // this device's annotations
-	foreign: HighlightsStorage; // highlights we couldn't render, preserved
+export interface PageReconcileInput {
+	url: string;
+	title?: string;
+	snapshot: PageRecord | null; // base (last reconciled for this page)
+	remote: PageRecord | null; // current Drive state for this page
+	annotations: Annotation[]; // this device's renderable annotations for the page
+	foreign: Highlight[]; // highlights we couldn't render, preserved
 	now: number;
 }
 
-export interface ReconcileOutput {
-	merged: SyncFile; // to upload + store as the new snapshot
-	sources: SourceAnnotations[]; // to write into the annotation store
-	foreign: HighlightsStorage; // to persist for next time
+export interface PageReconcileOutput {
+	merged: PageRecord; // to upload + store as this page's new snapshot
+	annotations: Annotation[]; // renderable, to write into the store
+	foreign: Highlight[]; // to persist for next time
+	title?: string;
 }
 
-/**
- * Pure reconcile: merge only the `highlights` slice; pass the extension's
- * drawings/video and their tombstones through verbatim.
- */
-export function reconcile(input: ReconcileInput): ReconcileOutput {
-	const { snapshot, remote, sources, foreign, now } = input;
-	const local = toLocalHighlights(sources, foreign);
+export function reconcilePage(input: PageReconcileInput): PageReconcileOutput {
+	const { url, now } = input;
+	const base = input.snapshot ?? emptyPageRecord(url);
+	const rem = input.remote ?? emptyPageRecord(url);
 
+	// Local highlights = preserved foreign + our annotations (authoritative for their ids).
+	const localHl: Highlight[] = [...input.foreign, ...input.annotations.map(annotationToHighlight)];
+
+	// Merge only highlights + comments; seed tombstones from the remote record.
 	const tombs: Tombstones = {
-		highlights: { ...remote.tombstones.highlights },
-		comments: { ...remote.tombstones.comments },
-		drawings: { ...remote.tombstones.drawings },
-		videoItems: { ...remote.tombstones.videoItems },
+		highlights: { ...rem.tombstones.highlights },
+		comments: { ...rem.tombstones.comments },
+		drawings: { ...rem.tombstones.drawings },
+		videoItems: { ...rem.tombstones.videoItems },
+	};
+	const mergedMap = mergeHighlightsStorage(
+		{ [url]: { url, highlights: base.highlights } },
+		{ [url]: { url, ...(input.title ? { title: input.title } : {}), highlights: localHl } },
+		{ [url]: { url, ...(rem.title ? { title: rem.title } : {}), highlights: rem.highlights } },
+		tombs,
+		now,
+	);
+	const mergedHl = mergedMap[url]?.highlights ?? [];
+	const title = mergedMap[url]?.title ?? input.title ?? rem.title ?? base.title;
+
+	const merged: PageRecord = {
+		version: 2,
+		url,
+		...(title ? { title } : {}),
+		...(rem.videoId ? { videoId: rem.videoId } : {}),
+		highlights: mergedHl,
+		drawings: rem.drawings,       // pass through verbatim — plugin doesn't manage these
+		videoItems: rem.videoItems,   // ditto
+		diagrams: rem.diagrams,       // ditto (pointers only; no image bytes)
+		tombstones: {
+			highlights: tombs.highlights,
+			comments: tombs.comments,
+			drawings: rem.tombstones.drawings,
+			videoItems: rem.tombstones.videoItems,
+			diagrams: rem.tombstones.diagrams,
+		},
 	};
 
-	const mergedHighlights = mergeHighlightsStorage(snapshot.highlights, local, remote.highlights, tombs, now);
-
-	const merged: SyncFile = {
-		version: 1,
-		highlights: mergedHighlights,
-		drawings: remote.drawings,
-		videoAnnotations: remote.videoAnnotations,
-		tombstones: tombs,
-	};
-
-	const split = fromMergedHighlights(mergedHighlights);
-	return { merged, sources: split.sources, foreign: split.foreign };
+	// Split the merged highlights into renderable annotations + preserved foreign.
+	const annotations: Annotation[] = [];
+	const foreign: Highlight[] = [];
+	for (const h of mergedHl) {
+		const ann = highlightToAnnotation(h, url);
+		if (ann) annotations.push(ann);
+		else foreign.push(h);
+	}
+	return { merged, annotations, foreign, title };
 }

@@ -3,7 +3,7 @@ import { generalSettings } from '../utils/storage-utils';
 import { updatePromptContextVisibility } from './interpreter-settings';
 import { initializePropertyTypesManager } from './property-types-manager';
 
-export type SettingsSection = 'general' | 'properties' | 'highlighter' | 'interpreter' | 'reader' | 'sync' | 'templates';
+export type SettingsSection = 'general' | 'properties' | 'highlighter' | 'interpreter' | 'reader' | 'sync' | 'data' | 'templates';
 
 export function showSettingsSection(section: SettingsSection, templateId?: string): void {
 	const sections = document.querySelectorAll('.settings-section');
@@ -77,7 +77,8 @@ export function initializeSidebar(): void {
 				|| section === 'highlighter'
 				|| section === 'interpreter'
 				|| section === 'reader'
-				|| section === 'sync') {
+				|| section === 'sync'
+				|| section === 'data') {
 				showSettingsSection(section as SettingsSection);
 			}
 			if (settingsContainer) {

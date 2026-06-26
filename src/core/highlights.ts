@@ -14,6 +14,7 @@ import { icons } from '../icons/icons';
 import { initializeMenu } from '../managers/menu';
 import { loadAllVideoData, removeVideoItem, VideoItem } from '../utils/video/video-storage';
 import { createVideoItemCard } from './video-highlights';
+import { getPage, setPage, removePage, getAll, clearAll, anyPageChanged } from '../utils/page-store';
 
 dayjs.extend(relativeTime);
 
@@ -140,7 +141,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 	// Listen for storage changes
 	browser.storage.onChanged.addListener((changes, area) => {
-		if (area === 'local' && (changes.highlights || changes.video_annotations)) {
+		if (area === 'local' && anyPageChanged(changes, ['hl', 'va'])) {
 			loadData().then(() => {
 				if (!updateSidebarCounts()) {
 					renderSidebar();
@@ -221,8 +222,8 @@ function reapplyThemeToPageGroups() {
 // --- Data loading ---
 
 async function loadData() {
-	const result = await browser.storage.local.get(['highlights', 'domains']);
-	const allHighlights = (result.highlights || {}) as Record<string, StoredData>;
+	const allHighlights = await getAll<StoredData>('hl');
+	const result = await browser.storage.local.get('domains');
 	domainSettingsMap = (result.domains || {}) as Record<string, DomainSettings>;
 
 	// Merge entries that normalize to the same URL
@@ -244,19 +245,14 @@ async function loadData() {
 		}
 	}
 
-	// Persist merges if any duplicates were found
-	let needsSave = false;
+	// Persist merges if any duplicates were found (one per-page key at a time)
 	for (const [normUrl, { stored, originalKeys }] of mergedMap) {
 		if (originalKeys.length > 1 || originalKeys[0] !== normUrl) {
-			needsSave = true;
 			for (const key of originalKeys) {
-				if (key !== normUrl) delete allHighlights[key];
+				if (key !== normUrl) await removePage('hl', key);
 			}
-			allHighlights[normUrl] = stored;
+			await setPage<StoredData>('hl', normUrl, stored);
 		}
-	}
-	if (needsSave) {
-		browser.storage.local.set({ highlights: allHighlights });
 	}
 
 	const domainMap = new Map<string, PageGroup[]>();
@@ -986,7 +982,7 @@ async function deleteCurrentContext() {
 	const nav = currentNav;
 	if (nav.type === 'all') {
 		if (!confirm(getMessage('deleteAllHighlightsConfirm'))) return;
-		await browser.storage.local.set({ highlights: {} });
+		await clearAll('hl');
 	} else if (nav.type === 'domain') {
 		if (!confirm(getMessage('deleteHighlightsForDomain'))) return;
 		const group = allDomainGroups.find(g => g.domain === nav.domain);
@@ -1215,11 +1211,10 @@ async function fetchDefuddled(url: string): Promise<DefuddleResult | null> {
 
 		// Save title to highlights storage
 		if (title) {
-			const result = await browser.storage.local.get('highlights');
-			const allHighlights = (result.highlights || {}) as Record<string, StoredData>;
-			if (allHighlights[url]) {
-				allHighlights[url].title = title;
-				await browser.storage.local.set({ highlights: allHighlights });
+			const stored = await getPage<StoredData>('hl', url);
+			if (stored) {
+				stored.title = title;
+				await setPage<StoredData>('hl', url, stored);
 			}
 		}
 
@@ -1481,30 +1476,20 @@ function displayPath(path: string): string {
 // --- Storage mutations ---
 
 async function deleteHighlight(url: string, highlightId: string) {
-	const result = await browser.storage.local.get('highlights');
-	const allHighlights = (result.highlights || {}) as Record<string, StoredData>;
-
-	if (allHighlights[url]) {
-		allHighlights[url].highlights = allHighlights[url].highlights.filter(h => h.id !== highlightId);
-		if (allHighlights[url].highlights.length === 0) {
-			delete allHighlights[url];
-		}
-		await browser.storage.local.set({ highlights: allHighlights });
+	const stored = await getPage<StoredData>('hl', url);
+	if (stored) {
+		stored.highlights = stored.highlights.filter(h => h.id !== highlightId);
+		if (stored.highlights.length === 0) await removePage('hl', url);
+		else await setPage<StoredData>('hl', url, stored);
 	}
 }
 
 async function deleteHighlightsForUrl(url: string) {
-	const result = await browser.storage.local.get('highlights');
-	const allHighlights = (result.highlights || {}) as Record<string, StoredData>;
-	delete allHighlights[url];
-	await browser.storage.local.set({ highlights: allHighlights });
+	await removePage('hl', url);
 }
 
 async function deleteHighlightsForDomain(group: DomainGroup) {
-	const result = await browser.storage.local.get('highlights');
-	const allHighlights = (result.highlights || {}) as Record<string, StoredData>;
 	for (const page of group.pages) {
-		delete allHighlights[page.url];
+		await removePage('hl', page.url);
 	}
-	await browser.storage.local.set({ highlights: allHighlights });
 }

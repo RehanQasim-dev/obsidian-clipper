@@ -1,5 +1,6 @@
 import Defuddle from 'defuddle/full';
 import browser from './browser-polyfill';
+import { getAll } from './page-store';
 import { detectBrowser } from './browser-detection';
 import { flattenShadowDom as flattenShadowDomUtil } from './flatten-shadow-dom';
 import { getLocalStorage, setLocalStorage } from './storage-utils';
@@ -2646,8 +2647,7 @@ export class Reader {
 	}
 
 	private static async getHighlightCountForDomain(domain: string): Promise<number> {
-		const result = await browser.storage.local.get('highlights');
-		const allHighlights = (result.highlights || {}) as Record<string, { highlights: any[]; url: string }>;
+		const allHighlights = await getAll<{ highlights: any[]; url: string }>('hl');
 		let count = 0;
 		for (const stored of Object.values(allHighlights)) {
 			try {

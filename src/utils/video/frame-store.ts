@@ -1,26 +1,28 @@
 import browser from '../browser-polyfill';
 
-// Binary store for captured video frame JPEGs, backed by IndexedDB.
+// Binary image store backed by IndexedDB. Holds two kinds of images, each in its
+// own object store of the same `clipper` DB:
+//   - `frames`   — captured YouTube video frame JPEGs (keyed by video item id)
+//   - `diagrams` — rendered Excalidraw comment-diagram PNGs (keyed by diagram id)
 //
-// Why not chrome.storage.local (where everything else lives)? That store is a
-// single JSON blob per key — every write re-serialises the WHOLE value, and it
-// can only hold JSON, so images had to be inlined as base64 (~33% larger) inside
-// the `video_annotations` blob. The result: editing one comment re-serialised
-// every frame you'd ever captured, and the file grew without bound. IndexedDB
-// stores the JPEG as a real `Blob` (no base64) in its own record, so frames are
-// written/read individually and never touch the metadata blob.
+// Why not chrome.storage.local (where the metadata lives)? That store is a single
+// JSON blob per key — every write re-serialises the WHOLE value, and it can only
+// hold JSON, so images had to be inlined as base64 (~33% larger). Editing one
+// comment then re-serialised every image, and the blob grew without bound.
+// IndexedDB stores each image as a real `Blob` (no base64) in its own record, so
+// images are written/read individually and never touch the metadata blob.
 //
 // Origin caveat: a content script's `indexedDB` is the *page's* origin (e.g.
-// youtube.com), which is NOT shared with the dashboard (an extension page). So
-// the single source-of-truth DB lives in the EXTENSION origin: background +
-// extension pages talk to it directly; content scripts route through the
-// background via runtime messaging. `frame.dataUrl` becomes a runtime-only field
-// (rehydrated on demand) and is never persisted in `video_annotations`.
+// youtube.com), which is NOT shared with the dashboard (an extension page). So the
+// single source-of-truth DB lives in the EXTENSION origin: background + extension
+// pages talk to it directly; content scripts route through the background via
+// runtime messaging. The image `dataUrl` is a runtime-only field (rehydrated on
+// demand) and is never persisted in the metadata.
 
 const DB_NAME = 'clipper';
-const DB_VERSION = 1;
-const STORE = 'frames';
-const PURGED_FLAG = 'video_frames_inline_purged_v1';
+const DB_VERSION = 2;
+type StoreName = 'frames' | 'diagrams';
+const STORES: StoreName[] = ['frames', 'diagrams'];
 
 const EXT_ORIGIN = (() => {
 	try { return new URL(browser.runtime.getURL('/')).origin; } catch { return ''; }
@@ -39,7 +41,9 @@ function openDb(): Promise<IDBDatabase> {
 		const req = indexedDB.open(DB_NAME, DB_VERSION);
 		req.onupgradeneeded = () => {
 			const db = req.result;
-			if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+			for (const store of STORES) {
+				if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
+			}
 		};
 		req.onsuccess = () => resolve(req.result);
 		req.onerror = () => reject(req.error);
@@ -47,37 +51,37 @@ function openDb(): Promise<IDBDatabase> {
 	return dbPromise;
 }
 
-function idbPut(id: string, blob: Blob): Promise<void> {
+function idbPut(store: StoreName, id: string, blob: Blob): Promise<void> {
 	return openDb().then(db => new Promise<void>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readwrite');
-		tx.objectStore(STORE).put(blob, id);
+		const tx = db.transaction(store, 'readwrite');
+		tx.objectStore(store).put(blob, id);
 		tx.oncomplete = () => resolve();
 		tx.onerror = () => reject(tx.error);
 	}));
 }
 
-function idbGet(id: string): Promise<Blob | null> {
+function idbGet(store: StoreName, id: string): Promise<Blob | null> {
 	return openDb().then(db => new Promise<Blob | null>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readonly');
-		const r = tx.objectStore(STORE).get(id);
+		const tx = db.transaction(store, 'readonly');
+		const r = tx.objectStore(store).get(id);
 		r.onsuccess = () => resolve((r.result as Blob) || null);
 		r.onerror = () => reject(r.error);
 	}));
 }
 
-function idbDelete(id: string): Promise<void> {
+function idbDelete(store: StoreName, id: string): Promise<void> {
 	return openDb().then(db => new Promise<void>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readwrite');
-		tx.objectStore(STORE).delete(id);
+		const tx = db.transaction(store, 'readwrite');
+		tx.objectStore(store).delete(id);
 		tx.oncomplete = () => resolve();
 		tx.onerror = () => reject(tx.error);
 	}));
 }
 
-function idbHas(id: string): Promise<boolean> {
+function idbHas(store: StoreName, id: string): Promise<boolean> {
 	return openDb().then(db => new Promise<boolean>((resolve, reject) => {
-		const tx = db.transaction(STORE, 'readonly');
-		const r = tx.objectStore(STORE).getKey(id);
+		const tx = db.transaction(store, 'readonly');
+		const r = tx.objectStore(store).getKey(id);
 		r.onsuccess = () => resolve(r.result !== undefined);
 		r.onerror = () => reject(r.error);
 	}));
@@ -96,31 +100,58 @@ function blobToDataUrl(blob: Blob): Promise<string> {
 	});
 }
 
-// --- Public API (context-aware) ----------------------------------------------
+// --- Generic context-aware blob access ---------------------------------------
 
-export async function saveFrameImage(id: string, dataUrl: string): Promise<void> {
-	if (inExtensionContext()) { await idbPut(id, await dataUrlToBlob(dataUrl)); return; }
-	await browser.runtime.sendMessage({ action: 'frameStorePut', id, dataUrl });
+async function saveImage(store: StoreName, id: string, dataUrl: string): Promise<void> {
+	if (inExtensionContext()) { await idbPut(store, id, await dataUrlToBlob(dataUrl)); return; }
+	await browser.runtime.sendMessage({ action: 'blobStorePut', store, id, dataUrl });
 }
 
-export async function loadFrameImage(id: string): Promise<string | null> {
+async function loadImage(store: StoreName, id: string): Promise<string | null> {
 	if (inExtensionContext()) {
-		const blob = await idbGet(id);
+		const blob = await idbGet(store, id);
 		return blob ? blobToDataUrl(blob) : null;
 	}
-	const res = await browser.runtime.sendMessage({ action: 'frameStoreGet', id }) as { dataUrl?: string } | undefined;
+	const res = await browser.runtime.sendMessage({ action: 'blobStoreGet', store, id }) as { dataUrl?: string } | undefined;
 	return res?.dataUrl || null;
 }
 
-export async function deleteFrameImage(id: string): Promise<void> {
-	if (inExtensionContext()) { await idbDelete(id); return; }
-	await browser.runtime.sendMessage({ action: 'frameStoreDelete', id });
+async function deleteImage(store: StoreName, id: string): Promise<void> {
+	if (inExtensionContext()) { await idbDelete(store, id); return; }
+	await browser.runtime.sendMessage({ action: 'blobStoreDelete', store, id });
 }
 
-export async function hasFrameImage(id: string): Promise<boolean> {
-	if (inExtensionContext()) return idbHas(id);
-	const res = await browser.runtime.sendMessage({ action: 'frameStoreHas', id }) as { has?: boolean } | undefined;
+async function hasImage(store: StoreName, id: string): Promise<boolean> {
+	if (inExtensionContext()) return idbHas(store, id);
+	const res = await browser.runtime.sendMessage({ action: 'blobStoreHas', store, id }) as { has?: boolean } | undefined;
 	return !!res?.has;
+}
+
+// --- Public API: video frames -------------------------------------------------
+
+export const saveFrameImage = (id: string, dataUrl: string) => saveImage('frames', id, dataUrl);
+export const loadFrameImage = (id: string) => loadImage('frames', id);
+export const deleteFrameImage = (id: string) => deleteImage('frames', id);
+export const hasFrameImage = (id: string) => hasImage('frames', id);
+
+// --- Public API: comment diagrams ---------------------------------------------
+
+export const saveDiagramImage = (id: string, dataUrl: string) => saveImage('diagrams', id, dataUrl);
+export const loadDiagramImage = (id: string) => loadImage('diagrams', id);
+export const deleteDiagramImage = (id: string) => deleteImage('diagrams', id);
+export const hasDiagramImage = (id: string) => hasImage('diagrams', id);
+
+// Wipe every image blob (both stores). Extension-context only (the background owns
+// the DB); used by the "delete local data" action.
+export async function clearAllImages(): Promise<void> {
+	if (!inExtensionContext()) return;
+	const db = await openDb();
+	await new Promise<void>((resolve, reject) => {
+		const tx = db.transaction(STORES, 'readwrite');
+		for (const s of STORES) tx.objectStore(s).clear();
+		tx.oncomplete = () => resolve();
+		tx.onerror = () => reject(tx.error);
+	});
 }
 
 // Background message handler. Routed here from background.ts so content scripts
@@ -128,43 +159,26 @@ export async function hasFrameImage(id: string): Promise<boolean> {
 // the action (the caller should then `return true` to keep sendResponse alive).
 export function handleFrameStoreMessage(
 	action: string,
-	req: { id?: string; dataUrl?: string },
+	req: { store?: StoreName; id?: string; dataUrl?: string },
 	sendResponse: (r?: any) => void,
 ): boolean {
-	if (!req.id) return false;
-	if (action === 'frameStorePut' && req.dataUrl) {
-		saveFrameImage(req.id, req.dataUrl).then(() => sendResponse({ ok: true })).catch(e => sendResponse({ error: String(e) }));
+	const store = req.store;
+	if (!req.id || !store || !STORES.includes(store)) return false;
+	if (action === 'blobStorePut' && req.dataUrl) {
+		saveImage(store, req.id, req.dataUrl).then(() => sendResponse({ ok: true })).catch(e => sendResponse({ error: String(e) }));
 		return true;
 	}
-	if (action === 'frameStoreGet') {
-		loadFrameImage(req.id).then(dataUrl => sendResponse({ dataUrl })).catch(() => sendResponse({ dataUrl: null }));
+	if (action === 'blobStoreGet') {
+		loadImage(store, req.id).then(dataUrl => sendResponse({ dataUrl })).catch(() => sendResponse({ dataUrl: null }));
 		return true;
 	}
-	if (action === 'frameStoreDelete') {
-		deleteFrameImage(req.id).then(() => sendResponse({ ok: true })).catch(e => sendResponse({ error: String(e) }));
+	if (action === 'blobStoreDelete') {
+		deleteImage(store, req.id).then(() => sendResponse({ ok: true })).catch(e => sendResponse({ error: String(e) }));
 		return true;
 	}
-	if (action === 'frameStoreHas') {
-		hasFrameImage(req.id).then(has => sendResponse({ has })).catch(() => sendResponse({ has: false }));
+	if (action === 'blobStoreHas') {
+		hasImage(store, req.id).then(has => sendResponse({ has })).catch(() => sendResponse({ has: false }));
 		return true;
 	}
 	return false;
-}
-
-// One-time cleanup: only the IndexedDB format is supported, so any legacy inline
-// base64 frame left in the `video_annotations` JSON is simply discarded (not
-// migrated) to reclaim the space. Idempotent and flag-gated. Extension-only.
-export async function purgeLegacyInlineFrames(): Promise<void> {
-	if (!inExtensionContext()) return;
-	const got = await browser.storage.local.get([PURGED_FLAG, 'video_annotations']);
-	if (got[PURGED_FLAG]) return;
-	const store = (got.video_annotations as Record<string, any>) || {};
-	let changed = false;
-	for (const url of Object.keys(store)) {
-		for (const item of store[url].items || []) {
-			if (item.frame && item.frame.dataUrl) { delete item.frame.dataUrl; changed = true; }
-		}
-	}
-	if (changed) await browser.storage.local.set({ video_annotations: store });
-	await browser.storage.local.set({ [PURGED_FLAG]: true });
 }

@@ -696,6 +696,18 @@
 	"syncSettings": {
 		"message": "Sync"
 	},
+	"data": {
+		"message": "Data"
+	},
+	"dataSettings": {
+		"message": "Data"
+	},
+	"deleteDriveData": {
+		"message": "Delete all data on Google Drive"
+	},
+	"deleteLocalData": {
+		"message": "Delete all local data"
+	},
 	"syncGoogleDrive": {
 		"message": "Google Drive sync"
 	},

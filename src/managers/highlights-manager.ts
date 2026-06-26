@@ -1,13 +1,12 @@
-import browser from '../utils/browser-polyfill';
 import { detectBrowser } from '../utils/browser-detection';
-import { AnyHighlightData, collapseGroupsForExport } from '../utils/highlighter';
+import { AnyHighlightData, StoredData, collapseGroupsForExport } from '../utils/highlighter';
+import { getAll } from '../utils/page-store';
 import dayjs from 'dayjs';
 import { getMessage } from '../utils/i18n';
 
 export async function exportHighlights(): Promise<void> {
 	try {
-		const result = await browser.storage.local.get('highlights');
-		const allHighlights = result.highlights || {};
+		const allHighlights = await getAll<StoredData>('hl');
 
 		const exportData = Object.entries(allHighlights).map(([url, data]) => ({
 			url,

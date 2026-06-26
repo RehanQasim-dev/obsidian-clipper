@@ -5,8 +5,8 @@ import { TextHighlightData } from './utils/highlighter';
 import { debounce } from './utils/debounce';
 import { Settings } from './types/types';
 import { debugLog } from './utils/debug';
-import { sync as syncToDrive, getStatus as getSyncStatus, resetSyncState } from './utils/sync-engine';
-import { connect as connectDrive, disconnect as disconnectDrive, getRedirectUrl, isConfigured as isSyncConfigured } from './utils/google-drive';
+import { sync as syncToDrive, syncChanged, findPagesForDiagrams, getStatus as getSyncStatus, resetSyncState } from './utils/sync-engine';
+import { connect as connectDrive, disconnect as disconnectDrive, getRedirectUrl, isConfigured as isSyncConfigured, wipeAppData } from './utils/google-drive';
 import {
 	markDirty as obsidianMarkDirty,
 	enqueueAll as obsidianEnqueueAll,
@@ -15,7 +15,8 @@ import {
 	testConnection as obsidianTestConnection,
 } from './utils/obsidian-sync';
 import { getConfig as getObsidianConfig, setConfig as setObsidianConfig } from './utils/obsidian-rest';
-import { handleFrameStoreMessage, purgeLegacyInlineFrames } from './utils/video/frame-store';
+import { handleFrameStoreMessage, clearAllImages } from './utils/video/frame-store';
+import { changedPages } from './utils/page-store';
 
 const YOUTUBE_EMBED_RULE_ID = 9001;
 const YOUTUBE_INNERTUBE_RULE_ID = 9002;
@@ -349,9 +350,25 @@ browser.runtime.onMessage.addListener((request: unknown) => {
 
 const SYNC_ALARM = 'driveSync';
 
-const debouncedSyncPush = debounce(() => {
-	syncToDrive(false).catch(err => console.warn('Drive sync push failed:', err));
+// On-change push is targeted: accumulate the changed page URLs and reconcile only
+// those (one page = one small Drive file), never the whole library.
+const pendingSyncUrls = new Set<string>();
+const flushSyncPush = debounce(() => {
+	const urls = [...pendingSyncUrls];
+	pendingSyncUrls.clear();
+	syncChanged(urls, false).catch(err => console.warn('Drive sync push failed:', err));
 }, 4000);
+function queueSyncPush(urls: string[]): void {
+	for (const u of urls) pendingSyncUrls.add(u);
+	flushSyncPush();
+}
+
+// Diagram ids whose content changed in a `diagrams` storage edit (keyed on updatedAt).
+function diagramIdsChanged(change: browser.Storage.StorageChange): string[] {
+	const oldV = (change.oldValue || {}) as Record<string, { updatedAt?: number }>;
+	const newV = (change.newValue || {}) as Record<string, { updatedAt?: number }>;
+	return Object.keys(newV).filter(id => oldV[id]?.updatedAt !== newV[id]?.updatedAt);
+}
 
 // --- Obsidian (Local REST API) sync -----------------------------------------
 // Live on change: enqueue each edited page/video and flush (debounced) to Obsidian.
@@ -364,37 +381,27 @@ const debouncedObsidianFlush = debounce(() => {
 	obsidianFlush().catch(err => console.warn('Obsidian sync flush failed:', err));
 }, 3000);
 
-// Which top-level URL keys changed between the old and new value of a store.
-function changedUrlKeys(change?: browser.Storage.StorageChange): string[] {
-	if (!change) return [];
-	const oldV = (change.oldValue as Record<string, unknown>) || {};
-	const newV = (change.newValue as Record<string, unknown>) || {};
-	const keys = new Set([...Object.keys(oldV), ...Object.keys(newV)]);
-	const out: string[] = [];
-	for (const k of keys) {
-		if (JSON.stringify(oldV[k]) !== JSON.stringify(newV[k])) out.push(k);
-	}
-	return out;
-}
-
-// Annotation edits land in storage.local under these keys. Ignore our own
-// bookkeeping keys (snapshot/status/token) to avoid a feedback loop.
+// Annotation edits land in per-page storage.local keys (`hl:`/`dr:`/`va:` — see
+// page-store). Each changed page is its own key, so the changed URL is the key
+// suffix; ignore our bookkeeping keys (snapshot/status/token) to avoid a loop.
 browser.storage.onChanged.addListener((changes, area) => {
 	if (area !== 'local') return;
-	if (isSyncConfigured() && (changes.highlights || changes.drawings || changes.video_annotations)) {
-		debouncedSyncPush();
+	const changed = changedPages(changes);
+	if (isSyncConfigured()) {
+		const syncUrls = new Set<string>([...changed.hl, ...changed.dr, ...changed.va]);
+		if (syncUrls.size) queueSyncPush([...syncUrls]);
+		// A diagram edit touches only the `diagrams` map — map it to its page(s).
+		if (changes.diagrams) {
+			const ids = diagramIdsChanged(changes.diagrams);
+			if (ids.length) findPagesForDiagrams(ids).then(urls => urls.length && queueSyncPush(urls)).catch(() => {});
+		}
 	}
 	// Obsidian: drawings aren't rendered into notes, so only highlights/video matter.
-	if (changes.highlights || changes.video_annotations) {
-		const urls = new Set([
-			...changedUrlKeys(changes.highlights),
-			...changedUrlKeys(changes.video_annotations),
-		]);
-		if (urls.size) {
-			obsidianMarkDirty([...urls])
-				.then(() => debouncedObsidianFlush())
-				.catch(() => {});
-		}
+	const obsidianUrls = new Set([...changed.hl, ...changed.va]);
+	if (obsidianUrls.size) {
+		obsidianMarkDirty([...obsidianUrls])
+			.then(() => debouncedObsidianFlush())
+			.catch(() => {});
 	}
 });
 
@@ -410,14 +417,9 @@ if (browser.alarms) {
 }
 
 browser.runtime.onStartup.addListener(() => {
-	purgeLegacyInlineFrames().catch(() => {});
 	if (isSyncConfigured()) syncToDrive(false).catch(() => {});
 	obsidianFlush().catch(() => {});
 });
-
-// Discard any legacy inline base64 frames once (only the IndexedDB format is
-// supported now). Also covers an update where onStartup doesn't fire.
-purgeLegacyInlineFrames().catch(() => {});
 
 let lastDrivePollTime = 0;
 const DRIVE_POLL_COOLDOWN_MS = 5000;
@@ -493,6 +495,33 @@ browser.runtime.onMessage.addListener((request: unknown, _sender: browser.Runtim
 			}
 			const status = await getSyncStatus();
 			sendResponse({ success: false, error: err instanceof Error ? err.message : String(err), status, configured: isSyncConfigured(), redirectUrl: getRedirectUrl() });
+		}
+	})();
+	return true;
+});
+
+// Destructive data wipes (Settings → Data). Kept separate from the sync actions.
+//   wipeDriveData  — delete everything the extension owns in Drive appDataFolder.
+//   wipeLocalData  — clear all local annotation data (storage.local keys + image blobs).
+browser.runtime.onMessage.addListener((request: unknown, _sender, sendResponse: (r?: any) => void): true | undefined => {
+	const action = (request as { action?: string } | null)?.action;
+	if (action !== 'wipeDriveData' && action !== 'wipeLocalData') return;
+	(async () => {
+		try {
+			if (action === 'wipeDriveData') {
+				const count = await wipeAppData(false); // silent token renew; never block on a consent window
+				await resetSyncState(); // local snapshots/meta now point at deleted files
+				sendResponse({ success: true, count });
+			} else {
+				const all = await browser.storage.local.get(null);
+				const keys = Object.keys(all).filter(k =>
+					/^(hl:|dr:|va:|snap:|pagemeta:)/.test(k) || k === 'diagrams' || k === 'page_sources' || k === 'sync_snapshot');
+				if (keys.length) await browser.storage.local.remove(keys);
+				await clearAllImages();
+				sendResponse({ success: true, count: keys.length });
+			}
+		} catch (err) {
+			sendResponse({ success: false, error: err instanceof Error ? err.message : String(err) });
 		}
 	})();
 	return true;

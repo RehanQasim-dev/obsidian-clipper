@@ -19,6 +19,7 @@ import {
 	CLIP_CSS_VERSION,
 } from './obsidian-export';
 import { getPageSource, deletePageSource } from './page-source';
+import { getPage, getAllUrls } from './page-store';
 
 // Background orchestrator for pushing annotations into Obsidian via the Local
 // REST API. Live on change: edits enqueue their normalized URL; a debounced flush
@@ -141,9 +142,8 @@ function noteName(path: string): string {
 // --- the one-page write ------------------------------------------------------
 
 async function processUrl(cfg: ObsidianRestConfig, url: string): Promise<void> {
-	const store = await browser.storage.local.get(['highlights', 'video_annotations']);
-	const hl = (store.highlights as Record<string, HighlightStored> | undefined)?.[url];
-	const vid = (store.video_annotations as Record<string, VideoStored> | undefined)?.[url];
+	const hl = await getPage<HighlightStored>('hl', url);
+	const vid = await getPage<VideoStored>('va', url);
 
 	const hasHighlights = !!hl?.highlights?.length;
 	const hasVideo = !!vid?.items?.length;
@@ -246,10 +246,9 @@ export async function markDirty(urls: string[]): Promise<void> {
 
 /** Enqueue every page/video that has annotations (the "Sync all" button). */
 export async function enqueueAll(): Promise<void> {
-	const store = await browser.storage.local.get(['highlights', 'video_annotations']);
 	const urls = new Set<string>([
-		...Object.keys((store.highlights as object) || {}),
-		...Object.keys((store.video_annotations as object) || {}),
+		...(await getAllUrls('hl')),
+		...(await getAllUrls('va')),
 	]);
 	const queue = new Set(await getQueue());
 	for (const u of urls) queue.add(u);

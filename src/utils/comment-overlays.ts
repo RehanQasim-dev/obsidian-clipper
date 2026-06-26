@@ -1,6 +1,7 @@
 import { AnyHighlightData, highlights, saveHighlights, updateHighlights } from './highlighter';
 import { getElementByXPath } from './dom-utils';
 import { textHighlightRanges, setActiveHighlight } from './highlighter-overlays';
+import { loadDiagramImage, deleteDiagramImage } from './video/frame-store';
 
 const COMMENT_BOX_WIDTH = 320;
 const COMMENT_BOX_MARGIN = 20;
@@ -14,28 +15,27 @@ let editingNoteKey: string | null = null; // highlightId-index
 
 browser.storage.onChanged.addListener((changes, area) => {
 	if (area === 'local' && changes.diagrams) {
-		const newDiagrams = changes.diagrams.newValue || {};
-		let updated = false;
+		const newDiagrams = (changes.diagrams.newValue || {}) as Record<string, any>;
+		const oldDiagrams = (changes.diagrams.oldValue || {}) as Record<string, any>;
 		for (const [id, data] of Object.entries(newDiagrams)) {
-			const dataUrl = (data as any).dataUrl;
-			if (dataUrl && localDiagramCache.get(id) !== dataUrl) {
-				localDiagramCache.set(id, dataUrl);
-				updated = true;
-				// A pending (just-drawn) diagram: now that Excalidraw has actually
-				// saved it, create its comment on the highlight that opened the editor.
-				// Nothing is written on open, so closing the popup without saving
-				// leaves no orphan "Diagram" comment behind.
+			const stamp = (data as any).updatedAt;
+			if (!stamp || stamp === oldDiagrams[id]?.updatedAt) continue;
+			// The rendered PNG now lives in IndexedDB (not in this entry) — fetch it
+			// into the cache, then render. Loading first avoids a flash of empty <img>.
+			loadDiagramImage(id).then((dataUrl) => {
+				if (dataUrl) localDiagramCache.set(id, dataUrl);
+				activeCommentBoxes.forEach((box) => boxRenderCache.delete(box));
+				// A pending (just-drawn) diagram: now that Excalidraw has actually saved
+				// it, create its comment on the highlight that opened the editor. Nothing
+				// is written on open, so closing without saving leaves no orphan comment.
 				const pendingHid = pendingDiagrams.get(id);
 				if (pendingHid) {
 					pendingDiagrams.delete(id);
 					saveComment(pendingHid, `<!--diagram:${id}-->`);
+				} else {
+					renderCommentBoxes();
 				}
-			}
-		}
-		if (updated) {
-			// Clear cache to force image src update
-			activeCommentBoxes.forEach((box) => boxRenderCache.delete(box));
-			renderCommentBoxes();
+			});
 		}
 	}
 });
@@ -219,6 +219,11 @@ export function renderCommentBoxes() {
 	}
 
 	if (highlightsWithComments.length === 0) {
+		// No annotation unit needs a box anymore (e.g. the last commented highlight
+		// was just deleted). Tear down any leftover boxes — skipping the cleanup
+		// below would otherwise strand an orphaned comment thread on the page.
+		for (const box of activeCommentBoxes.values()) box.remove();
+		activeCommentBoxes.clear();
 		return;
 	}
 
@@ -423,6 +428,8 @@ function createCommentBox(highlight: AnyHighlightData): HTMLElement {
 		} else if (target.closest('.obsidian-comment-delete')) {
 			const noteIndex = parseInt((target.closest('.obsidian-comment-delete') as HTMLElement).dataset.index || '0');
 			deleteComment(highlight.id, noteIndex);
+		} else if (target.closest('.obsidian-comment-thread-delete')) {
+			deleteCommentThread(highlight.id);
 		} else if (target.closest('.obsidian-comment-save-new')) {
 			const textarea = box.querySelector('textarea.new-comment-textarea') as HTMLTextAreaElement;
 			if (textarea) {
@@ -597,12 +604,10 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 				const src = localDiagramCache.get(diagramId) || '';
 				displayHtml = `<img class="obsidian-comment-diagram-img" data-diagram-id="${diagramId}" style="width: 100%; border-radius: 4px; cursor: pointer; display: block;" src="${src}" alt="Diagram"/>`;
 				if (!src) {
-					// Trigger fetch without waiting
-					browser.storage.local.get('diagrams').then(res => {
-						const diagrams = (res.diagrams || {}) as Record<string, any>;
-						const d = diagrams[diagramId];
-						if (d && d.dataUrl) {
-							localDiagramCache.set(diagramId, d.dataUrl);
+					// Image lives in IndexedDB now — fetch + cache, then re-render.
+					loadDiagramImage(diagramId).then(dataUrl => {
+						if (dataUrl) {
+							localDiagramCache.set(diagramId, dataUrl);
 							boxRenderCache.delete(box);
 							renderCommentBoxes();
 						}
@@ -642,7 +647,9 @@ function updateCommentBox(box: HTMLElement, highlight: AnyHighlightData) {
 								<button class="obsidian-comment-delete" data-index="${index}" aria-label="Delete comment">
 									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
 								</button>
-							</div>
+								${index === 0 ? `<button class="obsidian-comment-thread-delete" aria-label="Delete comment thread" title="Delete comment thread">
+									<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+								</button>` : ''}
 						</div>
 						<div class="obsidian-comment-text" data-index="${index}">${displayHtml}</div>
 					</div>
@@ -792,15 +799,65 @@ function deleteComment(highlightId: string, index: number) {
 	const ref = rep ? groupNotes(rep)[index] : undefined;
 	const owner = ref ? highlights.find(h => h.id === ref.ownerId) : undefined;
 	if (owner && owner.notes && ref) {
+		const deleted = owner.notes[ref.ownerIndex];
 		// New objects (no in-place splice) so undo can restore the deleted comment.
 		const newNotes = owner.notes.filter((_, i) => i !== ref.ownerIndex);
 		const updated = { ...owner, notes: newNotes };
 		const newHighlights = highlights.map(h => h.id === owner.id ? updated : h);
 		updateHighlights(newHighlights);
 		saveHighlights();
+		// If the deleted comment was a diagram, drop its scene + rendered image so
+		// neither storage.local nor the IndexedDB blob store accumulates orphans.
+		const dm = parseNoteString(deleted).text.match(/^<!--diagram:([A-Za-z0-9_-]+)-->$/);
+		if (dm) {
+			const did = dm[1];
+			localDiagramCache.delete(did);
+			deleteDiagramImage(did).catch(() => {});
+			browser.storage.local.get('diagrams').then(res => {
+				const diagrams = (res.diagrams || {}) as Record<string, any>;
+				if (diagrams[did]) { delete diagrams[did]; return browser.storage.local.set({ diagrams }); }
+			});
+		}
 		setActiveHighlight(null); // clear emphasis in case the box is removed
 		renderCommentBoxes();
 	}
+}
+
+// Delete the whole comment thread for an annotation unit while keeping the
+// highlight: clears notes from every group member. (Deleting the highlight
+// itself removes both highlight and notes — that path lives in the highlighter.)
+function deleteCommentThread(highlightId: string) {
+	const rep = highlights.find(h => h.id === highlightId);
+	if (!rep) return;
+	const members = groupMembers(rep);
+	const memberIds = new Set(members.map(m => m.id));
+
+	// Collect diagram comments so their scene + rendered image are cleaned up too,
+	// mirroring single-comment deletion (no orphans in storage.local / IndexedDB).
+	const diagramIds: string[] = [];
+	for (const m of members) {
+		for (const note of m.notes || []) {
+			const dm = parseNoteString(note).text.match(/^<!--diagram:([A-Za-z0-9_-]+)-->$/);
+			if (dm) diagramIds.push(dm[1]);
+		}
+	}
+
+	// New objects (no in-place mutation) so undo can restore the whole thread.
+	const newHighlights = highlights.map(h => memberIds.has(h.id) ? { ...h, notes: [] } : h);
+	updateHighlights(newHighlights);
+	saveHighlights();
+
+	for (const did of diagramIds) {
+		localDiagramCache.delete(did);
+		deleteDiagramImage(did).catch(() => {});
+		browser.storage.local.get('diagrams').then(res => {
+			const diagrams = (res.diagrams || {}) as Record<string, any>;
+			if (diagrams[did]) { delete diagrams[did]; return browser.storage.local.set({ diagrams }); }
+		});
+	}
+
+	setActiveHighlight(null); // clear emphasis — the box is about to be removed
+	renderCommentBoxes();
 }
 
 export function clearCommentBoxes() {
